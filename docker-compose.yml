@@ -1,0 +1,100 @@
+services:
+  api:
+    build: .
+    container_name: invoiceforge-api
+    ports:
+      - "8000:8000"
+    environment:
+      - APP_ENV=development
+      - APP_DEBUG=true
+      - DATABASE_URL=postgresql+asyncpg://invoiceforge:invoiceforge@postgres:5432/invoiceforge
+      - REDIS_URL=redis://redis:6379/0
+      - KOSIT_VALIDATOR_URL=http://kosit-validator:8080
+      - STORAGE_BASE_PATH=/app/data/storage
+    volumes:
+      - ./app:/app/app
+      - storage_data:/app/data/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    build: .
+    container_name: invoiceforge-worker
+    command: ["python", "-m", "arq", "app.worker.WorkerSettings"]
+    environment:
+      - APP_ENV=development
+      - DATABASE_URL=postgresql+asyncpg://invoiceforge:invoiceforge@postgres:5432/invoiceforge
+      - REDIS_URL=redis://redis:6379/0
+      - KOSIT_VALIDATOR_URL=http://kosit-validator:8080
+      - STORAGE_BASE_PATH=/app/data/storage
+    volumes:
+      - storage_data:/app/data/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: invoiceforge-postgres
+    environment:
+      POSTGRES_USER: invoiceforge
+      POSTGRES_PASSWORD: invoiceforge
+      POSTGRES_DB: invoiceforge
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U invoiceforge"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: invoiceforge-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Optional: KoSIT Validator for full Schematron validation
+  # Uncomment when needed
+  # kosit-validator:
+  #   image: eclipse-temurin:21-jre-alpine
+  #   container_name: invoiceforge-kosit
+  #   # Setup script downloads validator + config on first run
+  #   command: >
+  #     sh -c "
+  #       if [ ! -f /opt/kosit/validationtool.jar ]; then
+  #         apk add --no-cache curl unzip &&
+  #         mkdir -p /opt/kosit &&
+  #         curl -L -o /tmp/validator.zip https://github.com/itplr-kosit/validator/releases/download/v1.6.0/validator-1.6.0-distribution.zip &&
+  #         unzip /tmp/validator.zip -d /opt/kosit &&
+  #         curl -L -o /tmp/config.zip https://github.com/itplr-kosit/validator-configuration-xrechnung/releases/latest/download/validator-configuration-xrechnung_3.0.2_2024-01-31.zip &&
+  #         unzip /tmp/config.zip -d /opt/kosit/config;
+  #       fi &&
+  #       java -jar /opt/kosit/validationtool.jar -s /opt/kosit/config/scenarios.xml -D -H 0.0.0.0 -P 8080
+  #     "
+  #   ports:
+  #     - "8080:8080"
+  #   volumes:
+  #     - kosit_data:/opt/kosit
+  #   restart: unless-stopped
+
+volumes:
+  postgres_data:
+  storage_data:
+  # kosit_data:

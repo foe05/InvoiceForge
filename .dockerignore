@@ -1,0 +1,13 @@
+.git
+.gitignore
+*.pyc
+__pycache__
+.mypy_cache
+.pytest_cache
+.ruff_cache
+.env
+*.egg-info
+dist
+build
+data/storage
+RESEARCH.md
