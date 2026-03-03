@@ -13,18 +13,25 @@ services:
       - STORAGE_BASE_PATH=/app/data/storage
     volumes:
       - ./app:/app/app
+      - ./ui:/app/ui
       - storage_data:/app/data/storage
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/health').raise_for_status()"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     restart: unless-stopped
 
   worker:
     build: .
     container_name: invoiceforge-worker
-    command: ["python", "-m", "arq", "app.worker.WorkerSettings"]
+    command: ["python", "-m", "arq", "app.worker.settings.WorkerSettings"]
     environment:
       - APP_ENV=development
       - DATABASE_URL=postgresql+asyncpg://invoiceforge:invoiceforge@postgres:5432/invoiceforge
@@ -70,31 +77,39 @@ services:
       retries: 5
     restart: unless-stopped
 
-  # Optional: KoSIT Validator for full Schematron validation
-  # Uncomment when needed
-  # kosit-validator:
-  #   image: eclipse-temurin:21-jre-alpine
-  #   container_name: invoiceforge-kosit
-  #   # Setup script downloads validator + config on first run
-  #   command: >
-  #     sh -c "
-  #       if [ ! -f /opt/kosit/validationtool.jar ]; then
-  #         apk add --no-cache curl unzip &&
-  #         mkdir -p /opt/kosit &&
-  #         curl -L -o /tmp/validator.zip https://github.com/itplr-kosit/validator/releases/download/v1.6.0/validator-1.6.0-distribution.zip &&
-  #         unzip /tmp/validator.zip -d /opt/kosit &&
-  #         curl -L -o /tmp/config.zip https://github.com/itplr-kosit/validator-configuration-xrechnung/releases/latest/download/validator-configuration-xrechnung_3.0.2_2024-01-31.zip &&
-  #         unzip /tmp/config.zip -d /opt/kosit/config;
-  #       fi &&
-  #       java -jar /opt/kosit/validationtool.jar -s /opt/kosit/config/scenarios.xml -D -H 0.0.0.0 -P 8080
-  #     "
-  #   ports:
-  #     - "8080:8080"
-  #   volumes:
-  #     - kosit_data:/opt/kosit
-  #   restart: unless-stopped
+  # KoSIT Validator for full Schematron validation (XRechnung 3.0.2)
+  # Activate with: docker compose --profile full up
+  kosit-validator:
+    image: eclipse-temurin:21-jre-alpine
+    container_name: invoiceforge-kosit
+    command: >
+      sh -c "
+        if [ ! -f /opt/kosit/validationtool-*-standalone.jar ]; then
+          apk add --no-cache curl unzip &&
+          mkdir -p /opt/kosit /opt/kosit/config &&
+          curl -L -o /tmp/validator.zip https://github.com/itplr-kosit/validator/releases/download/v1.6.0/validator-1.6.0-distribution.zip &&
+          unzip -o /tmp/validator.zip -d /opt/kosit &&
+          curl -L -o /tmp/config.zip https://github.com/itplr-kosit/validator-configuration-xrechnung/releases/download/release-2024-06-28/validator-configuration-xrechnung_3.0.2_2024-06-28.zip &&
+          unzip -o /tmp/config.zip -d /opt/kosit/config &&
+          rm -f /tmp/validator.zip /tmp/config.zip;
+        fi &&
+        java -jar /opt/kosit/validationtool-*-standalone.jar -s /opt/kosit/config/scenarios.xml -D -H 0.0.0.0 -P 8080
+      "
+    ports:
+      - "8080:8080"
+    volumes:
+      - kosit_data:/opt/kosit
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8080 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    profiles:
+      - full
 
 volumes:
   postgres_data:
   storage_data:
-  # kosit_data:
+  kosit_data:

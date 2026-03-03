@@ -5,7 +5,7 @@ Usage:
 
     pipeline = ConversionPipeline()
     result = pipeline.convert(invoice)
-    # result.xml_bytes   → CII-XML
+    # result.xml_bytes   → CII-XML or UBL-XML
     # result.pdf_bytes   → ZUGFeRD PDF/A-3  (if requested)
 """
 
@@ -16,6 +16,7 @@ from pathlib import Path
 
 from app.core.generation.cii_generator import CIIGenerator
 from app.core.generation.pdf_renderer import PDFRenderer
+from app.core.generation.ubl_generator import UBLGenerator
 from app.core.generation.zugferd_generator import ZUGFeRDGenerator
 from app.core.validation.xsd_validator import ValidationResult, XSDValidator
 from app.models.invoice import Invoice, OutputFormat
@@ -47,9 +48,9 @@ class ConversionPipeline:
         """Run the full conversion pipeline.
 
         Steps:
-            1. Generate CII-XML via drafthorse
-            2. If ZUGFeRD PDF requested: render visual PDF, embed XML
-            3. Validate the XML output
+            1. Generate XML (CII for ZUGFeRD/XRechnung-CII, UBL for XRechnung-UBL)
+            2. If ZUGFeRD PDF requested: render visual PDF, embed CII-XML
+            3. Return result
 
         Returns:
             ConversionResult with XML bytes, optionally PDF bytes, and validation info.
@@ -58,18 +59,32 @@ class ConversionPipeline:
         xml_bytes = b""
         pdf_bytes: bytes | None = None
 
-        # Step 1: Generate CII-XML
-        try:
-            cii_gen = CIIGenerator(invoice)
-            xml_bytes = cii_gen.generate()
-        except Exception as e:
-            errors.append(f"CII-XML generation failed: {e}")
-            return ConversionResult(
-                invoice=invoice,
-                xml_bytes=xml_bytes,
-                output_format=invoice.output_format,
-                errors=errors,
-            )
+        # Step 1: Generate XML based on output format
+        if invoice.output_format == OutputFormat.XRECHNUNG_UBL:
+            try:
+                ubl_gen = UBLGenerator(invoice)
+                xml_bytes = ubl_gen.generate()
+            except Exception as e:
+                errors.append(f"UBL-XML generation failed: {e}")
+                return ConversionResult(
+                    invoice=invoice,
+                    xml_bytes=xml_bytes,
+                    output_format=invoice.output_format,
+                    errors=errors,
+                )
+        else:
+            # CII-XML for ZUGFeRD and XRechnung-CII
+            try:
+                cii_gen = CIIGenerator(invoice)
+                xml_bytes = cii_gen.generate()
+            except Exception as e:
+                errors.append(f"CII-XML generation failed: {e}")
+                return ConversionResult(
+                    invoice=invoice,
+                    xml_bytes=xml_bytes,
+                    output_format=invoice.output_format,
+                    errors=errors,
+                )
 
         # Step 2: If ZUGFeRD PDF, render visual PDF and embed XML
         if invoice.output_format == OutputFormat.ZUGFERD_PDF:

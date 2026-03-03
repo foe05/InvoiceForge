@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Validieren - InvoiceForge{% endblock %}
+
+{% block content %}
+<h1>E-Rechnung validieren</h1>
+
+<div class="card">
+    <form hx-post="/ui/validate" hx-target="#validate-result" hx-encoding="multipart/form-data">
+        <div class="form-group">
+            <label for="validate-file">XML-Datei hochladen (CII oder UBL)</label>
+            <input type="file" id="validate-file" name="file" accept=".xml" required>
+        </div>
+        <div class="form-group">
+            <label>
+                <input type="checkbox" name="use_kosit" value="true" checked>
+                KoSIT Schematron-Validierung (erfordert Docker-Sidecar)
+            </label>
+        </div>
+        <button type="submit" class="btn btn-primary">
+            <span class="htmx-indicator spinner"></span>
+            Validieren
+        </button>
+    </form>
+</div>
+
+<div id="validate-result"></div>
+{% endblock %}

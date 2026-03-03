@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Extrahieren - InvoiceForge{% endblock %}
+
+{% block content %}
+<h1>Rechnungsdaten extrahieren</h1>
+
+<div class="card">
+    <h2>Strukturierte Extraktion</h2>
+    <p>Lade eine ZUGFeRD-PDF oder XRechnung-XML hoch, um die strukturierten Rechnungsdaten zu extrahieren.</p>
+
+    <form hx-post="/ui/extract" hx-target="#extract-result" hx-encoding="multipart/form-data">
+        <div class="form-group">
+            <label for="extract-file">Datei hochladen (PDF oder XML)</label>
+            <input type="file" id="extract-file" name="file" accept=".pdf,.xml" required>
+        </div>
+        <button type="submit" class="btn btn-primary">
+            <span class="htmx-indicator spinner"></span>
+            Extrahieren
+        </button>
+    </form>
+</div>
+
+<div id="extract-result"></div>
+
+{% if llm_available %}
+<div class="card" style="margin-top: 2rem;">
+    <h2>LLM-basierte Extraktion</h2>
+    <p>Lade eine unstrukturierte PDF-Rechnung hoch. InvoiceForge nutzt KI, um die Rechnungsfelder zu erkennen.</p>
+
+    <form hx-post="/ui/extract/llm" hx-target="#llm-result" hx-encoding="multipart/form-data">
+        <div class="form-group">
+            <label for="llm-file">PDF-Rechnung hochladen</label>
+            <input type="file" id="llm-file" name="file" accept=".pdf" required>
+        </div>
+        <button type="submit" class="btn btn-primary">
+            <span class="htmx-indicator spinner"></span>
+            Mit KI extrahieren
+        </button>
+    </form>
+    <div id="llm-result"></div>
+</div>
+{% endif %}
+{% endblock %}

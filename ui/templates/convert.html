@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Konvertieren - InvoiceForge{% endblock %}
+
+{% block content %}
+<h1>Rechnung konvertieren</h1>
+
+<div class="card">
+    <form id="convert-form" hx-post="/ui/convert" hx-target="#result" hx-encoding="multipart/form-data">
+        <div class="form-group">
+            <label for="input-file">Eingabedatei (JSON mit Rechnungsdaten)</label>
+            <input type="file" id="input-file" name="file" accept=".json" required>
+            <small>JSON-Datei mit Invoice-Modell nach EN 16931.</small>
+        </div>
+
+        <div class="form-row">
+            <div class="form-group">
+                <label for="output-format">Ausgabeformat</label>
+                <select id="output-format" name="output_format">
+                    <option value="zugferd_pdf" selected>ZUGFeRD PDF</option>
+                    <option value="xrechnung_cii">XRechnung CII (XML)</option>
+                    <option value="xrechnung_ubl">XRechnung UBL (XML)</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="profile">ZUGFeRD-Profil</label>
+                <select id="profile" name="profile">
+                    <option value="EN 16931" selected>EN 16931 (Comfort)</option>
+                    <option value="BASIC">BASIC</option>
+                    <option value="EXTENDED">EXTENDED</option>
+                    <option value="XRECHNUNG">XRECHNUNG</option>
+                </select>
+            </div>
+        </div>
+
+        <button type="submit" class="btn btn-primary">
+            <span class="htmx-indicator spinner"></span>
+            Konvertieren
+        </button>
+    </form>
+</div>
+
+<div id="result"></div>
+
+<div class="card" style="margin-top: 2rem;">
+    <h2>Oder: JSON direkt eingeben</h2>
+    <form hx-post="/ui/convert/json" hx-target="#result-json">
+        <div class="form-group">
+            <label for="json-input">Invoice JSON</label>
+            <textarea id="json-input" name="invoice_json" rows="20" placeholder='{"invoice_number": "RE-2026-001", ...}'></textarea>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label for="output-format-2">Ausgabeformat</label>
+                <select id="output-format-2" name="output_format">
+                    <option value="zugferd_pdf" selected>ZUGFeRD PDF</option>
+                    <option value="xrechnung_cii">XRechnung CII</option>
+                    <option value="xrechnung_ubl">XRechnung UBL</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="profile-2">Profil</label>
+                <select id="profile-2" name="profile">
+                    <option value="EN 16931" selected>EN 16931</option>
+                    <option value="XRECHNUNG">XRECHNUNG</option>
+                </select>
+            </div>
+        </div>
+        <button type="submit" class="btn btn-primary">
+            <span class="htmx-indicator spinner"></span>
+            Konvertieren
+        </button>
+    </form>
+    <div id="result-json"></div>
+</div>
+{% endblock %}
