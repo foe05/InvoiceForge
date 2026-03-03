@@ -2,15 +2,64 @@
 
 German E-Rechnung converter – create ZUGFeRD & XRechnung from multiple inputs as a processing tool in a chain.
 
-## Features (planned)
+## Features
 
-- **Input:** PDF, scanned images, CSV, JSON, XML
-- **Extraction:** pdfplumber + Tesseract OCR + LLM-based field mapping
-- **Output:** ZUGFeRD PDF/A-3 (all profiles), XRechnung CII, XRechnung UBL
-- **Validation:** XSD (inline) + KoSIT Validator (Schematron, Docker sidecar)
-- **API:** FastAPI REST with auto-generated OpenAPI docs
-- **CLI:** `invoiceforge convert`, `invoiceforge validate`, `invoiceforge serve`
-- **Multi-tenant:** Schema-based isolation in PostgreSQL
+### Input & Extraction
+
+- **PDF** – digital text extraction (pdfplumber) and scanned-image OCR (Tesseract)
+- **XML** – structured parsing of ZUGFeRD/Factur-X CII, XRechnung CII & UBL
+- **JSON** – direct EN 16931 invoice data
+- **CSV** – tabular import (planned)
+- **Multi-method extraction pipeline** with automatic fallback:
+  structured XML → invoice2data template matching → LLM-based extraction (Claude / Ollama) → OCR
+
+### Output Formats
+
+- **ZUGFeRD 2.4 / Factur-X 1.08** – hybrid PDF/A-3 with embedded CII-XML, all profiles (Minimum, Basic WL, Basic, EN 16931, Extended, XRechnung)
+- **XRechnung 3.0.2 CII** – Cross Industry Invoice XML
+- **XRechnung 3.0.2 UBL** – Universal Business Language XML
+- **Visual PDF** – rendered invoice via WeasyPrint + Jinja2 templates
+
+### Validation
+
+- **XSD schema validation** – offline, via drafthorse/lxml
+- **Schematron rules** – CEN EN 16931 + XRechnung business rules
+- **KoSIT Validator** – Docker sidecar integration for official German government validation
+- Detailed reports with error/warning categorisation, rule IDs and line locations
+
+### API (FastAPI)
+
+- `POST /api/v1/invoices/convert` – Invoice JSON → XML/PDF (base64 or direct download)
+- `POST /api/v1/invoices/extract` – PDF/XML upload → structured Invoice JSON
+- `POST /api/v1/invoices/validate` – XML upload → validation report
+- `GET  /api/v1/invoices/records` – paginated processing history
+- `GET  /api/v1/invoices/formats` – available output formats & profiles
+- Auto-generated OpenAPI/Swagger docs at `/api/docs`
+
+### CLI
+
+- `invoiceforge convert` – convert PDF/XML/JSON to E-Rechnung (supports `nextcloud://` URIs)
+- `invoiceforge extract` – extract invoice data to JSON (with `--llm` flag for LLM mode)
+- `invoiceforge validate` – validate E-Rechnung XML with coloured output
+- `invoiceforge serve` – start FastAPI server (`--host`, `--port`, `--reload`)
+- `invoiceforge worker` – start ARQ background job worker
+- `invoiceforge tenant create|list` – multi-tenant management
+
+### Web UI
+
+- **Streamlit Dashboard** – interactive pages for conversion, validation, tenant management and job history
+- **HTMX + Jinja2** – server-rendered UI with partial page updates
+
+### Multi-Tenant & Storage
+
+- **Schema-based tenant isolation** in PostgreSQL with per-tenant config (company data, credentials, defaults)
+- **API-key authentication** per tenant
+- **Local filesystem** and **WebDAV/Nextcloud** storage backends
+- **Background jobs** via ARQ + Redis for async conversion, extraction and validation
+
+### Data Model (EN 16931)
+
+- Full Pydantic model covering all semantic fields: parties, addresses, line items, tax breakdowns, totals, payment terms, IBAN/BIC, Leitweg-ID (B2G), currency codes and more
 
 ## Tech Stack
 
@@ -18,14 +67,21 @@ German E-Rechnung converter – create ZUGFeRD & XRechnung from multiple inputs 
 |---|---|
 | Backend | FastAPI + Uvicorn |
 | ZUGFeRD XML | drafthorse (CII) |
+| UBL XML | lxml |
 | PDF/A-3 | factur-x |
 | PDF rendering | WeasyPrint + Jinja2 |
-| OCR | pdfplumber + Tesseract |
-| Database | PostgreSQL + SQLAlchemy 2.0 (async) |
+| PDF extraction | pdfplumber |
+| OCR | pytesseract (optional) |
+| LLM extraction | Anthropic Claude / Ollama (optional) |
+| Template matching | invoice2data (optional) |
+| Database | PostgreSQL + SQLAlchemy 2.0 (async) + asyncpg |
 | Migrations | Alembic |
 | Background jobs | ARQ (Redis) |
 | Validation | lxml (XSD) + KoSIT Validator (Schematron) |
-| UI | HTMX + Jinja2 |
+| CLI | Typer |
+| Web UI | Streamlit + HTMX + Jinja2 |
+| Testing | pytest + pytest-asyncio + pytest-cov |
+| Code quality | ruff + mypy + pre-commit |
 
 ## Quick Start
 
@@ -75,7 +131,7 @@ InvoiceForge/
 │   ├── config.py        # Settings (pydantic-settings)
 │   └── main.py          # FastAPI app entry point
 ├── tests/               # pytest test suite
-├── ui/                  # HTMX templates (planned)
+├── ui/                  # Streamlit app + HTMX templates
 ├── docker-compose.yml
 ├── Dockerfile
 └── pyproject.toml
