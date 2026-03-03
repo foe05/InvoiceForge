@@ -1,36 +1,47 @@
-"""Invoice API endpoints – convert, validate, and manage invoices."""
+"""Invoice API endpoints – convert, validate, extract, and download invoices."""
 
 from __future__ import annotations
 
 import uuid
+from base64 import b64encode
+from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 from fastapi import APIRouter, HTTPException, UploadFile, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import Response
+from pydantic import BaseModel
 
+from app.core.extraction.xml_extractor import XMLExtractor
+from app.core.pipeline import ConversionPipeline
 from app.models.invoice import Invoice, OutputFormat, ZUGFeRDProfile
 
 router = APIRouter()
 
-
-# --- Request / Response schemas ---
-
-
-class ConvertRequest(Invoice):
-    """Request body for invoice conversion (inherits full Invoice model)."""
+_pipeline = ConversionPipeline()
+_xml_extractor = XMLExtractor()
 
 
-class ConvertResponse(Invoice):
-    """Successful conversion response with job metadata."""
+# --- Response schemas ---
 
+
+class ConvertResponse(BaseModel):
     job_id: str
-    status: str = "completed"
-    output_file: str | None = None
-    validation_passed: bool | None = None
+    success: bool
+    invoice_number: str
+    output_format: str
+    errors: list[str] = []
+    xml_base64: str | None = None
+    pdf_base64: str | None = None
 
 
-class ValidationResult(Invoice):
-    """Validation result."""
+class ExtractResponse(BaseModel):
+    job_id: str
+    success: bool
+    invoice: Invoice | None = None
+    errors: list[str] = []
 
+
+class ValidateResponse(BaseModel):
     is_valid: bool
     errors: list[str] = []
     warnings: list[str] = []
@@ -42,91 +53,119 @@ class ValidationResult(Invoice):
 @router.post(
     "/convert",
     response_model=ConvertResponse,
-    status_code=status.HTTP_200_OK,
     summary="Convert invoice data to E-Rechnung",
 )
-async def convert_invoice(request: ConvertRequest) -> ConvertResponse:
+async def convert_invoice(invoice: Invoice) -> ConvertResponse:
     """Convert structured invoice data to ZUGFeRD PDF or XRechnung XML.
 
-    Accepts a complete invoice object (EN 16931 data model) and generates
-    the specified output format.
+    Accepts a complete Invoice object (EN 16931) and returns the
+    generated output as base64-encoded data.
     """
-    # TODO: Implement conversion pipeline
-    # 1. Validate input data
-    # 2. Generate CII/UBL XML via drafthorse
-    # 3. If ZUGFeRD: embed XML in PDF/A-3 via factur-x
-    # 4. Validate output via KoSIT
-    # 5. Store result and return
+    job_id = uuid.uuid4().hex[:12]
+    result = _pipeline.convert(invoice)
 
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="Conversion pipeline not yet implemented",
+    return ConvertResponse(
+        job_id=job_id,
+        success=result.success,
+        invoice_number=invoice.invoice_number,
+        output_format=invoice.output_format.value,
+        errors=result.errors,
+        xml_base64=b64encode(result.xml_bytes).decode() if result.xml_bytes else None,
+        pdf_base64=b64encode(result.pdf_bytes).decode() if result.pdf_bytes else None,
+    )
+
+
+@router.post(
+    "/convert/download",
+    summary="Convert and download as file",
+)
+async def convert_and_download(invoice: Invoice) -> Response:
+    """Convert invoice and return the generated file directly."""
+    result = _pipeline.convert(invoice)
+
+    if not result.success:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"errors": result.errors},
+        )
+
+    safe_name = invoice.invoice_number.replace("/", "_").replace(" ", "_")
+
+    if invoice.output_format == OutputFormat.ZUGFERD_PDF and result.pdf_bytes:
+        return Response(
+            content=result.pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{safe_name}.pdf"'},
+        )
+
+    return Response(
+        content=result.xml_bytes,
+        media_type="application/xml",
+        headers={"Content-Disposition": f'attachment; filename="{safe_name}.xml"'},
     )
 
 
 @router.post(
     "/extract",
-    response_model=ConvertResponse,
-    status_code=status.HTTP_200_OK,
-    summary="Extract invoice data from uploaded file",
+    response_model=ExtractResponse,
+    summary="Extract invoice data from uploaded ZUGFeRD PDF or XRechnung XML",
 )
-async def extract_invoice(
-    file: UploadFile,
-    output_format: OutputFormat = OutputFormat.ZUGFERD_PDF,
-    profile: ZUGFeRDProfile = ZUGFeRDProfile.EN16931,
-) -> ConvertResponse:
-    """Upload a PDF/image/CSV and extract invoice data.
-
-    Uses OCR + LLM-based extraction to parse the document, then optionally
-    converts to the target E-Rechnung format.
+async def extract_invoice(file: UploadFile) -> ExtractResponse:
+    """Upload a ZUGFeRD PDF or XRechnung XML and extract the structured
+    invoice data. Returns an Invoice model that can be modified and
+    re-submitted to /convert.
     """
-    if file.content_type not in (
-        "application/pdf",
-        "image/png",
-        "image/jpeg",
-        "text/csv",
-        "application/xml",
-        "text/xml",
-    ):
+    job_id = uuid.uuid4().hex[:12]
+
+    if file.content_type not in ("application/pdf", "application/xml", "text/xml"):
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail=f"Unsupported file type: {file.content_type}",
+            detail=f"Unsupported: {file.content_type}. Use PDF or XML.",
         )
 
-    # TODO: Implement extraction pipeline
-    # 1. Save uploaded file
-    # 2. Extract text (pdfplumber / Tesseract)
-    # 3. Map fields via LLM or invoice2data
-    # 4. Build Invoice model
-    # 5. Convert to target format
+    content = await file.read()
+    suffix = ".pdf" if "pdf" in (file.content_type or "") else ".xml"
 
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="Extraction pipeline not yet implemented",
-    )
+    try:
+        with NamedTemporaryFile(suffix=suffix, delete=True) as tmp:
+            tmp.write(content)
+            tmp.flush()
+            invoice = _xml_extractor.extract_from_file(Path(tmp.name))
+    except Exception as e:
+        return ExtractResponse(job_id=job_id, success=False, errors=[str(e)])
+
+    return ExtractResponse(job_id=job_id, success=True, invoice=invoice)
 
 
 @router.post(
     "/validate",
-    status_code=status.HTTP_200_OK,
+    response_model=ValidateResponse,
     summary="Validate an E-Rechnung XML file",
 )
-async def validate_invoice(file: UploadFile) -> dict:
-    """Upload an XRechnung/ZUGFeRD XML for validation against XSD + Schematron rules."""
+async def validate_invoice(file: UploadFile) -> ValidateResponse:
+    """Upload a CII-XML for XSD validation."""
     if file.content_type not in ("application/xml", "text/xml"):
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             detail="Only XML files can be validated",
         )
 
-    # TODO: Implement validation
-    # 1. XSD validation (inline, lxml)
-    # 2. KoSIT Validator call (Docker sidecar)
+    content = await file.read()
 
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="Validation endpoint not yet implemented",
-    )
+    from drafthorse.utils import validate_xml
+    from lxml import etree
+
+    try:
+        etree.fromstring(content)
+    except etree.XMLSyntaxError as e:
+        return ValidateResponse(is_valid=False, errors=[f"XML parse error: {e}"])
+
+    # XSD validation via drafthorse utility
+    try:
+        validate_xml(content, schema="FACTUR-X_EN16931")
+        return ValidateResponse(is_valid=True)
+    except Exception as e:
+        return ValidateResponse(is_valid=False, errors=[str(e)])
 
 
 @router.get(
@@ -136,6 +175,6 @@ async def validate_invoice(file: UploadFile) -> dict:
 async def list_formats() -> dict:
     """Return the available output formats and ZUGFeRD profiles."""
     return {
-        "output_formats": [f.value for f in OutputFormat],
-        "zugferd_profiles": [p.value for p in ZUGFeRDProfile],
+        "output_formats": [{"value": f.value, "label": f.name} for f in OutputFormat],
+        "zugferd_profiles": [{"value": p.value, "label": p.name} for p in ZUGFeRDProfile],
     }
