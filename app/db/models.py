@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Numeric, String, Text, func
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Numeric, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -13,7 +13,16 @@ class Base(DeclarativeBase):
 
 
 class Tenant(Base):
-    """Multi-tenant support – each tenant has isolated data."""
+    """Multi-tenant support – each tenant has isolated data.
+
+    Jeder Mandant hat eigene:
+      - Stammdaten (Firmenname, Adresse, Steuernummer, IBAN etc.)
+      - Nextcloud-Zugangsdaten (optional: eigene Instanz)
+      - Standard-Ausgabeformat (ZUGFeRD/XRechnung)
+      - Standard-ZUGFeRD-Profil
+
+    Die Konfiguration wird als JSON in der `config` Spalte gespeichert.
+    """
 
     __tablename__ = "tenants"
 
@@ -21,7 +30,38 @@ class Tenant(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     slug: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     api_key_hash: Mapped[str] = mapped_column(String(255), nullable=False)
-    is_active: Mapped[bool] = mapped_column(default=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    # Tenant-specific configuration (JSON blob)
+    # Structure:
+    # {
+    #   "company": {
+    #     "name": "Muster GmbH",
+    #     "street": "Musterstr. 1",
+    #     "city": "Berlin",
+    #     "postal_code": "10115",
+    #     "country_code": "DE",
+    #     "vat_id": "DE123456789",
+    #     "tax_number": "30/123/45678",
+    #     "iban": "DE89370400440532013000",
+    #     "bic": "COBADEFFXXX",
+    #     "email": "rechnung@muster.de",
+    #     "phone": "+49 30 123456",
+    #     "contact_name": "Max Mustermann"
+    #   },
+    #   "nextcloud": {
+    #     "url": "https://cloud.example.com/remote.php/dav/files/user/",
+    #     "username": "user",
+    #     "password": "app-password",
+    #     "root_path": "/InvoiceForge"
+    #   },
+    #   "defaults": {
+    #     "output_format": "zugferd_pdf",
+    #     "zugferd_profile": "EN 16931"
+    #   }
+    # }
+    config: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

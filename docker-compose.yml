@@ -1,45 +1,83 @@
 services:
+  # --- FastAPI Backend ---
   api:
-    build: .
+    build:
+      context: .
+      target: runtime
     container_name: invoiceforge-api
     ports:
       - "8000:8000"
     environment:
-      - APP_ENV=development
-      - APP_DEBUG=true
+      - APP_ENV=production
+      - APP_DEBUG=false
       - DATABASE_URL=postgresql+asyncpg://invoiceforge:invoiceforge@postgres:5432/invoiceforge
       - REDIS_URL=redis://redis:6379/0
       - KOSIT_VALIDATOR_URL=http://kosit-validator:8080
       - STORAGE_BASE_PATH=/app/data/storage
+      - SCHEMA_DIR=/app/data/schemas
     volumes:
-      - ./app:/app/app
-      - ./ui:/app/ui
       - storage_data:/app/data/storage
+      - schema_data:/app/data/schemas
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/health').raise_for_status()"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 15s
       timeout: 5s
       retries: 3
       start_period: 10s
     restart: unless-stopped
 
-  worker:
-    build: .
-    container_name: invoiceforge-worker
-    command: ["python", "-m", "arq", "app.worker.settings.WorkerSettings"]
+  # --- Streamlit Frontend ---
+  ui:
+    build:
+      context: .
+      target: runtime
+    container_name: invoiceforge-ui
+    command: ["streamlit", "run", "ui/streamlit_app.py", "--server.port=8501", "--server.address=0.0.0.0", "--server.headless=true"]
+    ports:
+      - "8501:8501"
     environment:
-      - APP_ENV=development
+      - APP_ENV=production
       - DATABASE_URL=postgresql+asyncpg://invoiceforge:invoiceforge@postgres:5432/invoiceforge
       - REDIS_URL=redis://redis:6379/0
       - KOSIT_VALIDATOR_URL=http://kosit-validator:8080
       - STORAGE_BASE_PATH=/app/data/storage
+      - SCHEMA_DIR=/app/data/schemas
     volumes:
       - storage_data:/app/data/storage
+      - schema_data:/app/data/schemas
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+  # --- ARQ Background Worker ---
+  worker:
+    build:
+      context: .
+      target: runtime
+    container_name: invoiceforge-worker
+    command: ["python", "-m", "arq", "app.worker.settings.WorkerSettings"]
+    environment:
+      - APP_ENV=production
+      - DATABASE_URL=postgresql+asyncpg://invoiceforge:invoiceforge@postgres:5432/invoiceforge
+      - REDIS_URL=redis://redis:6379/0
+      - KOSIT_VALIDATOR_URL=http://kosit-validator:8080
+      - STORAGE_BASE_PATH=/app/data/storage
+      - SCHEMA_DIR=/app/data/schemas
+    volumes:
+      - storage_data:/app/data/storage
+      - schema_data:/app/data/schemas
     depends_on:
       postgres:
         condition: service_healthy
@@ -47,7 +85,8 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  postgres:
+  # --- PostgreSQL ---
+  db:
     image: postgres:16-alpine
     container_name: invoiceforge-postgres
     environment:
@@ -65,6 +104,12 @@ services:
       retries: 5
     restart: unless-stopped
 
+  # Alias for backwards compatibility
+  postgres:
+    extends:
+      service: db
+
+  # --- Redis ---
   redis:
     image: redis:7-alpine
     container_name: invoiceforge-redis
@@ -77,7 +122,26 @@ services:
       retries: 5
     restart: unless-stopped
 
-  # KoSIT Validator for full Schematron validation (XRechnung 3.0.2)
+  # --- Ollama LLM Server (optional) ---
+  # Activate with: docker compose --profile llm up
+  ollama:
+    image: ollama/ollama:latest
+    container_name: invoiceforge-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:11434/api/version || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    profiles:
+      - llm
+
+  # --- KoSIT Validator (optional, for full Schematron validation) ---
   # Activate with: docker compose --profile full up
   kosit-validator:
     image: eclipse-temurin:21-jre-alpine
@@ -112,4 +176,6 @@ services:
 volumes:
   postgres_data:
   storage_data:
+  schema_data:
   kosit_data:
+  ollama_data:

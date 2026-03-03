@@ -1,12 +1,14 @@
-"""Database service layer for invoice record persistence.
+"""Database service layer for invoice record and tenant persistence.
 
 Provides CRUD operations for InvoiceRecord and Tenant models,
-used by the API endpoints and background workers.
+used by the API endpoints, CLI, and background workers.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
+import secrets
 import uuid
 from datetime import datetime, timezone
 
@@ -15,6 +17,142 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import InvoiceRecord, Tenant
 from app.models.invoice import Invoice
+
+
+def _hash_api_key(api_key: str) -> str:
+    """Hash an API key for storage (SHA-256)."""
+    return hashlib.sha256(api_key.encode("utf-8")).hexdigest()
+
+
+def _generate_api_key() -> str:
+    """Generate a secure random API key."""
+    return f"if_{secrets.token_urlsafe(32)}"
+
+
+class TenantService:
+    """Service for managing Tenant CRUD operations."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def create_tenant(
+        self,
+        name: str,
+        slug: str,
+        config: dict | None = None,
+        api_key: str | None = None,
+    ) -> tuple[Tenant, str]:
+        """Mandant anlegen.
+
+        Args:
+            name: Anzeigename des Mandanten.
+            slug: Eindeutiger URL-sicherer Bezeichner.
+            config: Mandantenkonfiguration (JSON-Struktur).
+            api_key: Optionaler API-Key (wird generiert wenn nicht angegeben).
+
+        Returns:
+            Tuple aus (Tenant-Objekt, klartext API-Key).
+        """
+        if api_key is None:
+            api_key = _generate_api_key()
+
+        tenant = Tenant(
+            id=uuid.uuid4(),
+            name=name,
+            slug=slug,
+            api_key_hash=_hash_api_key(api_key),
+            config=json.dumps(config) if config else None,
+            is_active=True,
+        )
+        self.session.add(tenant)
+        await self.session.flush()
+        return tenant, api_key
+
+    async def get_tenant(self, tenant_id: uuid.UUID) -> Tenant | None:
+        """Mandant per ID laden."""
+        return await self.session.get(Tenant, tenant_id)
+
+    async def get_tenant_by_slug(self, slug: str) -> Tenant | None:
+        """Mandant per Slug laden."""
+        result = await self.session.execute(
+            select(Tenant).where(Tenant.slug == slug)
+        )
+        return result.scalar_one_or_none()
+
+    async def authenticate_by_api_key(self, api_key: str) -> Tenant | None:
+        """Mandant über API-Key authentifizieren."""
+        key_hash = _hash_api_key(api_key)
+        result = await self.session.execute(
+            select(Tenant).where(
+                Tenant.api_key_hash == key_hash,
+                Tenant.is_active == True,  # noqa: E712
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def list_tenants(self, active_only: bool = True) -> list[Tenant]:
+        """Alle Mandanten auflisten."""
+        query = select(Tenant).order_by(Tenant.name)
+        if active_only:
+            query = query.where(Tenant.is_active == True)  # noqa: E712
+        result = await self.session.execute(query)
+        return list(result.scalars().all())
+
+    async def update_tenant(
+        self,
+        tenant_id: uuid.UUID,
+        name: str | None = None,
+        config: dict | None = None,
+        is_active: bool | None = None,
+    ) -> Tenant | None:
+        """Mandant aktualisieren."""
+        tenant = await self.session.get(Tenant, tenant_id)
+        if tenant is None:
+            return None
+
+        if name is not None:
+            tenant.name = name
+        if config is not None:
+            tenant.config = json.dumps(config)
+        if is_active is not None:
+            tenant.is_active = is_active
+
+        await self.session.flush()
+        return tenant
+
+    async def delete_tenant(self, tenant_id: uuid.UUID) -> bool:
+        """Mandant deaktivieren (soft delete)."""
+        tenant = await self.session.get(Tenant, tenant_id)
+        if tenant is None:
+            return False
+        tenant.is_active = False
+        await self.session.flush()
+        return True
+
+    @staticmethod
+    def get_tenant_config(tenant: Tenant) -> dict:
+        """Parse tenant configuration JSON."""
+        if tenant.config:
+            return json.loads(tenant.config)
+        return {}
+
+    @staticmethod
+    def get_tenant_company(tenant: Tenant) -> dict:
+        """Firmenstammdaten des Mandanten."""
+        config = TenantService.get_tenant_config(tenant)
+        return config.get("company", {})
+
+    @staticmethod
+    def get_tenant_nextcloud(tenant: Tenant) -> dict:
+        """Nextcloud-Konfiguration des Mandanten."""
+        config = TenantService.get_tenant_config(tenant)
+        return config.get("nextcloud", {})
+
+    @staticmethod
+    def get_tenant_defaults(tenant: Tenant) -> dict:
+        """Standard-Einstellungen des Mandanten."""
+        config = TenantService.get_tenant_config(tenant)
+        return config.get("defaults", {})
 
 
 class InvoiceService:

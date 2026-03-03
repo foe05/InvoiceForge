@@ -46,11 +46,18 @@ class Settings(BaseSettings):
     storage_base_path: Path = Path("./data/storage")
     upload_max_size_mb: int = 50
 
-    # WebDAV
+    # Validation schemas
+    schema_dir: Path = Path("./data/schemas")
+
+    # WebDAV / Nextcloud
     webdav_enabled: bool = False
     webdav_url: str = ""
     webdav_username: str = ""
     webdav_password: str = ""
+    nextcloud_url: str = ""
+    nextcloud_username: str = ""
+    nextcloud_password: str = ""
+    nextcloud_root_path: str = "/InvoiceForge"
 
     # LLM
     llm_provider: LLMProvider = LLMProvider.NONE
@@ -59,6 +66,10 @@ class Settings(BaseSettings):
 
     # OCR
     tesseract_cmd: str = "tesseract"
+
+    # Default tenant settings
+    default_output_format: str = "zugferd_pdf"
+    default_zugferd_profile: str = "EN 16931"
 
     @property
     def is_development(self) -> bool:
@@ -72,6 +83,21 @@ class Settings(BaseSettings):
     @property
     def upload_max_size_bytes(self) -> int:
         return self.upload_max_size_mb * 1024 * 1024
+
+    @property
+    def effective_webdav_url(self) -> str:
+        """Return the Nextcloud/WebDAV URL (prefer NEXTCLOUD_URL)."""
+        return self.nextcloud_url or self.webdav_url
+
+    @property
+    def effective_webdav_username(self) -> str:
+        """Return the Nextcloud/WebDAV username."""
+        return self.nextcloud_username or self.webdav_username
+
+    @property
+    def effective_webdav_password(self) -> str:
+        """Return the Nextcloud/WebDAV password."""
+        return self.nextcloud_password or self.webdav_password
 
 
 settings = Settings()
