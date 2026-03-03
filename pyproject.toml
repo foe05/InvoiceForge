@@ -7,7 +7,7 @@ packages = ["app"]
 
 [project]
 name = "invoiceforge"
-version = "0.1.0"
+version = "0.2.0"
 description = "German E-Rechnung converter – ZUGFeRD & XRechnung from multiple inputs"
 readme = "README.md"
 license = "GPL-3.0-or-later"
@@ -17,7 +17,7 @@ authors = [
 ]
 keywords = ["e-rechnung", "xrechnung", "zugferd", "factur-x", "invoice", "en16931"]
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 3 - Alpha",
     "Framework :: FastAPI",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
@@ -52,6 +52,8 @@ dependencies = [
     "httpx>=0.28,<1",
     # XML processing
     "lxml>=5.3,<6",
+    # CLI
+    "typer>=0.15,<1",
 ]
 
 [project.optional-dependencies]
@@ -64,6 +66,9 @@ llm = [
 ]
 invoice2data = [
     "invoice2data>=0.4,<1",
+]
+ui = [
+    "streamlit>=1.40,<2",
 ]
 dev = [
     "pytest>=8,<9",
