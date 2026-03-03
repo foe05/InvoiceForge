@@ -5,11 +5,12 @@
 # --- Stage 1: Build dependencies ---
 FROM python:3.12-slim AS builder
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN rm -rf /var/lib/apt/lists/* && \
+    apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libpango1.0-dev \
     libcairo2-dev \
-    libgdk-pixbuf2.0-dev \
+    libgdk-pixbuf-2.0-dev \
     libffi-dev \
     libxml2-dev \
     libxslt1-dev \
@@ -18,8 +19,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /build
 
 COPY pyproject.toml ./
-RUN pip install --no-cache-dir --prefix=/install ".[ocr]" && \
-    pip install --no-cache-dir --prefix=/install typer streamlit
+COPY app/__init__.py ./app/
+RUN pip install --no-cache-dir --prefix=/install ".[ocr,ui]"
 
 
 # --- Stage 2: Runtime image ---
@@ -49,8 +50,8 @@ COPY ui/ ./ui/
 COPY scripts/ ./scripts/
 COPY pyproject.toml alembic.ini docker-entrypoint.sh ./
 
-# Install the app package itself
-RUN pip install --no-cache-dir -e .
+# Install the app package itself (dependencies already installed from builder)
+RUN pip install --no-cache-dir --no-deps .
 
 # Create directories
 RUN mkdir -p /app/data/storage /app/data/schemas && \

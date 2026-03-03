@@ -47,9 +47,6 @@ services:
         condition: service_healthy
 
   # Disable PostgreSQL in dev mode (use SQLite)
-  db:
-    profiles:
-      - never
   postgres:
     profiles:
       - never

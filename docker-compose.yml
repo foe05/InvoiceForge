@@ -86,7 +86,7 @@ services:
     restart: unless-stopped
 
   # --- PostgreSQL ---
-  db:
+  postgres:
     image: postgres:16-alpine
     container_name: invoiceforge-postgres
     environment:
@@ -103,11 +103,6 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
-
-  # Alias for backwards compatibility
-  postgres:
-    extends:
-      service: db
 
   # --- Redis ---
   redis:
