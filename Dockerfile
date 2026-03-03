@@ -8,17 +8,20 @@ FROM python:3.12-slim AS builder
 RUN rm -rf /var/lib/apt/lists/* && \
     apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    pkg-config \
     libpango1.0-dev \
     libcairo2-dev \
     libgdk-pixbuf-2.0-dev \
     libffi-dev \
     libxml2-dev \
     libxslt1-dev \
+    libjpeg62-turbo-dev \
+    zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
 
-COPY pyproject.toml ./
+COPY pyproject.toml README.md ./
 COPY app/__init__.py ./app/
 RUN pip install --no-cache-dir --prefix=/install ".[ocr,ui]"
 
@@ -48,7 +51,7 @@ WORKDIR /app
 COPY app/ ./app/
 COPY ui/ ./ui/
 COPY scripts/ ./scripts/
-COPY pyproject.toml alembic.ini docker-entrypoint.sh ./
+COPY pyproject.toml README.md alembic.ini docker-entrypoint.sh ./
 
 # Install the app package itself (dependencies already installed from builder)
 RUN pip install --no-cache-dir --no-deps .
