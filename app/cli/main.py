@@ -210,12 +210,25 @@ def _run_extract(args: argparse.Namespace) -> None:
         invoice = extractor.extract_from_file(input_path)
         print("Extraction method: structured (CII-XML)", file=sys.stderr)
     except Exception as e:
-        if not getattr(args, "llm", False):
+        if not getattr(args, "llm", False) and input_path.suffix.lower() != ".pdf":
             print(f"Error: {e}", file=sys.stderr)
             print("Hint: Use --llm for unstructured PDF extraction", file=sys.stderr)
             sys.exit(1)
 
-    # Fallback: LLM extraction
+    # Fallback 1: invoice2data template matching for PDFs
+    if invoice is None and input_path.suffix.lower() == ".pdf":
+        try:
+            from app.core.extraction.invoice2data_extractor import Invoice2DataExtractor
+
+            i2d = Invoice2DataExtractor()
+            invoice = i2d.extract(input_path)
+            print("Extraction method: invoice2data (template matching)", file=sys.stderr)
+        except ImportError:
+            pass
+        except Exception:
+            pass
+
+    # Fallback 2: LLM extraction
     if invoice is None and getattr(args, "llm", False):
         try:
             from app.core.extraction.llm_extractor import LLMExtractor

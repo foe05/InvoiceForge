@@ -112,9 +112,29 @@ async def extract_invoice(
             "errors": [],
         }
     except Exception as e:
-        logger.info("Job %s: Structured extraction failed (%s), trying LLM", job_id, e)
+        logger.info("Job %s: Structured extraction failed (%s), trying fallbacks", job_id, e)
 
-    # Fallback: LLM-based extraction for unstructured PDFs
+    # Fallback 1: invoice2data template matching for PDFs
+    if suffix == ".pdf":
+        try:
+            from app.core.extraction.invoice2data_extractor import Invoice2DataExtractor
+
+            i2d = Invoice2DataExtractor()
+            invoice = i2d.extract(input_path)
+            logger.info("Job %s: invoice2data extraction successful", job_id)
+            return {
+                "job_id": job_id,
+                "success": True,
+                "invoice": json.loads(invoice.model_dump_json()),
+                "extraction_method": "invoice2data",
+                "errors": [],
+            }
+        except ImportError:
+            logger.info("Job %s: invoice2data not installed, trying LLM", job_id)
+        except Exception as e:
+            logger.info("Job %s: invoice2data failed (%s), trying LLM", job_id, e)
+
+    # Fallback 2: LLM-based extraction for unstructured PDFs
     if suffix == ".pdf":
         try:
             from app.core.extraction.llm_extractor import LLMExtractor

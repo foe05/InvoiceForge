@@ -1,6 +1,6 @@
 FROM python:3.12-slim AS base
 
-# System dependencies for WeasyPrint, lxml, pdfplumber
+# System dependencies for WeasyPrint, lxml, pdfplumber, Tesseract OCR
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libpango1.0-dev \
@@ -25,6 +25,11 @@ COPY . .
 # Create storage directory
 RUN mkdir -p /app/data/storage
 
+# Entrypoint script runs migrations then starts the app
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
+
 EXPOSE 8000
 
+ENTRYPOINT ["/docker-entrypoint.sh"]
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

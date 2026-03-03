@@ -1,5 +1,6 @@
 """FastAPI application entry point."""
 
+import logging
 from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
 from pathlib import Path
@@ -11,15 +12,21 @@ from app import __version__
 from app.api.v1.router import api_router
 from app.api.ui_routes import router as ui_router
 from app.config import settings
+from app.logging_config import setup_logging
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application startup and shutdown events."""
+    setup_logging()
+    logger.info("InvoiceForge %s starting (env=%s)", __version__, settings.app_env.value)
+
     # Startup: ensure storage directory exists
     settings.storage_base_path.mkdir(parents=True, exist_ok=True)
     yield
-    # Shutdown: cleanup if needed
+    logger.info("InvoiceForge shutting down")
 
 
 app = FastAPI(
