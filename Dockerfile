@@ -15,7 +15,7 @@ RUN rm -rf /var/lib/apt/lists/* && \
     libffi-dev \
     libxml2-dev \
     libxslt1-dev \
-    libjpeg62-turbo-dev \
+    libjpeg-dev \
     zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
 
