@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <title>Rechnung {{ invoice.invoice_number }}</title>
+    <style>
+        @page {
+            size: A4;
+            margin: 20mm 15mm 25mm 15mm;
+            @bottom-center {
+                content: "Seite " counter(page) " von " counter(pages);
+                font-size: 8pt;
+                color: #666;
+            }
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+            font-size: 10pt;
+            line-height: 1.4;
+            color: #1a1a1a;
+        }
+
+        /* --- Header --- */
+        .header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 15mm;
+        }
+
+        .seller-info {
+            max-width: 55%;
+        }
+
+        .seller-info .company-name {
+            font-size: 16pt;
+            font-weight: 700;
+            color: #2c3e50;
+            margin-bottom: 2mm;
+        }
+
+        .seller-info .address {
+            font-size: 9pt;
+            color: #555;
+            line-height: 1.5;
+        }
+
+        .invoice-meta {
+            text-align: right;
+        }
+
+        .invoice-meta .label {
+            font-size: 20pt;
+            font-weight: 700;
+            color: #2c3e50;
+            margin-bottom: 3mm;
+        }
+
+        .invoice-meta table {
+            margin-left: auto;
+        }
+
+        .invoice-meta table td {
+            padding: 1mm 0;
+            font-size: 9pt;
+        }
+
+        .invoice-meta table td:first-child {
+            color: #666;
+            padding-right: 5mm;
+        }
+
+        .invoice-meta table td:last-child {
+            font-weight: 600;
+            text-align: right;
+        }
+
+        /* --- Addresses --- */
+        .addresses {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 10mm;
+        }
+
+        .address-block {
+            width: 48%;
+        }
+
+        .address-block .label {
+            font-size: 7pt;
+            text-transform: uppercase;
+            letter-spacing: 0.5pt;
+            color: #888;
+            border-bottom: 0.5pt solid #ccc;
+            padding-bottom: 1mm;
+            margin-bottom: 2mm;
+        }
+
+        .address-block .name {
+            font-weight: 700;
+            font-size: 11pt;
+            margin-bottom: 1mm;
+        }
+
+        .address-block .details {
+            font-size: 9pt;
+            color: #444;
+            line-height: 1.5;
+        }
+
+        /* --- Note --- */
+        .note {
+            background: #f8f9fa;
+            border-left: 3pt solid #2c3e50;
+            padding: 3mm 4mm;
+            margin-bottom: 8mm;
+            font-size: 9pt;
+            color: #444;
+        }
+
+        /* --- Line items table --- */
+        .lines-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 8mm;
+        }
+
+        .lines-table thead th {
+            background: #2c3e50;
+            color: #fff;
+            font-weight: 600;
+            font-size: 8pt;
+            text-transform: uppercase;
+            letter-spacing: 0.3pt;
+            padding: 2.5mm 3mm;
+            text-align: left;
+        }
+
+        .lines-table thead th.num {
+            text-align: right;
+        }
+
+        .lines-table tbody td {
+            padding: 2mm 3mm;
+            border-bottom: 0.5pt solid #e0e0e0;
+            font-size: 9pt;
+            vertical-align: top;
+        }
+
+        .lines-table tbody td.num {
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .lines-table tbody tr:nth-child(even) {
+            background: #f8f9fa;
+        }
+
+        /* --- Totals --- */
+        .totals-section {
+            display: flex;
+            justify-content: flex-end;
+            margin-bottom: 10mm;
+        }
+
+        .totals-table {
+            width: 50%;
+            border-collapse: collapse;
+        }
+
+        .totals-table td {
+            padding: 1.5mm 3mm;
+            font-size: 9pt;
+        }
+
+        .totals-table td:last-child {
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .totals-table .subtotal td {
+            border-top: 0.5pt solid #ccc;
+        }
+
+        .totals-table .grand-total td {
+            border-top: 1.5pt solid #2c3e50;
+            font-size: 12pt;
+            font-weight: 700;
+            color: #2c3e50;
+            padding-top: 2.5mm;
+        }
+
+        /* --- Payment info --- */
+        .payment-section {
+            background: #f8f9fa;
+            padding: 4mm 5mm;
+            border-radius: 2mm;
+            margin-bottom: 8mm;
+        }
+
+        .payment-section h3 {
+            font-size: 9pt;
+            text-transform: uppercase;
+            letter-spacing: 0.3pt;
+            color: #2c3e50;
+            margin-bottom: 2mm;
+        }
+
+        .payment-section table td {
+            padding: 0.5mm 0;
+            font-size: 9pt;
+        }
+
+        .payment-section table td:first-child {
+            color: #666;
+            padding-right: 5mm;
+            width: 40%;
+        }
+
+        /* --- Footer --- */
+        .footer {
+            font-size: 7.5pt;
+            color: #888;
+            text-align: center;
+            border-top: 0.5pt solid #ccc;
+            padding-top: 3mm;
+        }
+
+        .footer .tax-info {
+            margin-bottom: 1mm;
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <div class="header">
+        <div class="seller-info">
+            <div class="company-name">{{ invoice.seller.name }}</div>
+            <div class="address">
+                {{ invoice.seller.address.street }}<br>
+                {% if invoice.seller.address.additional_line %}
+                    {{ invoice.seller.address.additional_line }}<br>
+                {% endif %}
+                {{ invoice.seller.address.postal_code }} {{ invoice.seller.address.city }}<br>
+                {% if invoice.seller.contact_email %}
+                    {{ invoice.seller.contact_email }}
+                {% endif %}
+                {% if invoice.seller.contact_phone %}
+                    · {{ invoice.seller.contact_phone }}
+                {% endif %}
+            </div>
+        </div>
+        <div class="invoice-meta">
+            <div class="label">Rechnung</div>
+            <table>
+                <tr>
+                    <td>Rechnungsnr.</td>
+                    <td>{{ invoice.invoice_number }}</td>
+                </tr>
+                <tr>
+                    <td>Datum</td>
+                    <td>{{ invoice.invoice_date.strftime('%d.%m.%Y') }}</td>
+                </tr>
+                {% if invoice.order_reference %}
+                <tr>
+                    <td>Bestellnr.</td>
+                    <td>{{ invoice.order_reference }}</td>
+                </tr>
+                {% endif %}
+                {% if invoice.payment.due_date %}
+                <tr>
+                    <td>Fällig am</td>
+                    <td>{{ invoice.payment.due_date.strftime('%d.%m.%Y') }}</td>
+                </tr>
+                {% endif %}
+            </table>
+        </div>
+    </div>
+
+    <!-- Addresses -->
+    <div class="addresses">
+        <div class="address-block">
+            <div class="label">Rechnungsempfänger</div>
+            <div class="name">{{ invoice.buyer.name }}</div>
+            <div class="details">
+                {{ invoice.buyer.address.street }}<br>
+                {% if invoice.buyer.address.additional_line %}
+                    {{ invoice.buyer.address.additional_line }}<br>
+                {% endif %}
+                {{ invoice.buyer.address.postal_code }} {{ invoice.buyer.address.city }}
+            </div>
+        </div>
+        <div class="address-block">
+            <div class="label">Rechnungssteller</div>
+            <div class="name">{{ invoice.seller.name }}</div>
+            <div class="details">
+                {% if invoice.seller.vat_id %}
+                    USt-IdNr.: {{ invoice.seller.vat_id }}<br>
+                {% endif %}
+                {% if invoice.seller.tax_number %}
+                    Steuernr.: {{ invoice.seller.tax_number }}<br>
+                {% endif %}
+                {% if invoice.seller.registration_name %}
+                    {{ invoice.seller.registration_name }}
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Note -->
+    {% if invoice.note %}
+    <div class="note">
+        {{ invoice.note }}
+    </div>
+    {% endif %}
+
+    <!-- Line items -->
+    <table class="lines-table">
+        <thead>
+            <tr>
+                <th style="width: 8%">Pos.</th>
+                <th style="width: 37%">Beschreibung</th>
+                <th class="num" style="width: 12%">Menge</th>
+                <th style="width: 8%">Einh.</th>
+                <th class="num" style="width: 15%">Einzelpreis</th>
+                <th class="num" style="width: 8%">USt %</th>
+                <th class="num" style="width: 15%">Netto</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for line in invoice.lines %}
+            <tr>
+                <td>{{ line.line_id }}</td>
+                <td>
+                    {{ line.description }}
+                    {% if line.item_number %}
+                        <br><span style="font-size: 8pt; color: #888;">Art.-Nr.: {{ line.item_number }}</span>
+                    {% endif %}
+                </td>
+                <td class="num">{{ "%.2f"|format(line.quantity) }}</td>
+                <td>{{ line.unit_code }}</td>
+                <td class="num">{{ "%.2f"|format(line.unit_price) }} {{ invoice.currency_code.value }}</td>
+                <td class="num">{{ "%.1f"|format(line.tax_rate) }}%</td>
+                <td class="num">{{ "%.2f"|format(line.line_net_amount) }} {{ invoice.currency_code.value }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <!-- Totals -->
+    <div class="totals-section">
+        <table class="totals-table">
+            <tr>
+                <td>Nettobetrag</td>
+                <td>{{ "%.2f"|format(invoice.totals.net_amount) }} {{ invoice.currency_code.value }}</td>
+            </tr>
+            {% for tb in invoice.tax_breakdown %}
+            <tr>
+                <td>USt {{ "%.1f"|format(tb.tax_rate) }}% auf {{ "%.2f"|format(tb.taxable_amount) }}</td>
+                <td>{{ "%.2f"|format(tb.tax_amount) }} {{ invoice.currency_code.value }}</td>
+            </tr>
+            {% endfor %}
+            {% if invoice.totals.allowance_total > 0 %}
+            <tr>
+                <td>Nachlässe</td>
+                <td>-{{ "%.2f"|format(invoice.totals.allowance_total) }} {{ invoice.currency_code.value }}</td>
+            </tr>
+            {% endif %}
+            {% if invoice.totals.charge_total > 0 %}
+            <tr>
+                <td>Zuschläge</td>
+                <td>{{ "%.2f"|format(invoice.totals.charge_total) }} {{ invoice.currency_code.value }}</td>
+            </tr>
+            {% endif %}
+            <tr class="grand-total">
+                <td>Gesamtbetrag</td>
+                <td>{{ "%.2f"|format(invoice.totals.gross_amount) }} {{ invoice.currency_code.value }}</td>
+            </tr>
+            {% if invoice.totals.prepaid_amount > 0 %}
+            <tr>
+                <td>Bereits bezahlt</td>
+                <td>-{{ "%.2f"|format(invoice.totals.prepaid_amount) }} {{ invoice.currency_code.value }}</td>
+            </tr>
+            <tr class="subtotal">
+                <td><strong>Zahlbetrag</strong></td>
+                <td><strong>{{ "%.2f"|format(invoice.totals.due_amount) }} {{ invoice.currency_code.value }}</strong></td>
+            </tr>
+            {% endif %}
+        </table>
+    </div>
+
+    <!-- Payment -->
+    <div class="payment-section">
+        <h3>Zahlungsinformationen</h3>
+        <table>
+            {% if invoice.payment.description %}
+            <tr>
+                <td>Zahlungsbedingung</td>
+                <td>{{ invoice.payment.description }}</td>
+            </tr>
+            {% endif %}
+            {% if invoice.payment.iban %}
+            <tr>
+                <td>IBAN</td>
+                <td>{{ invoice.payment.iban }}</td>
+            </tr>
+            {% endif %}
+            {% if invoice.payment.bic %}
+            <tr>
+                <td>BIC</td>
+                <td>{{ invoice.payment.bic }}</td>
+            </tr>
+            {% endif %}
+            {% if invoice.payment.bank_name %}
+            <tr>
+                <td>Bank</td>
+                <td>{{ invoice.payment.bank_name }}</td>
+            </tr>
+            {% endif %}
+            {% if invoice.payment.payment_reference %}
+            <tr>
+                <td>Verwendungszweck</td>
+                <td>{{ invoice.payment.payment_reference }}</td>
+            </tr>
+            {% endif %}
+        </table>
+    </div>
+
+    <!-- Footer -->
+    <div class="footer">
+        <div class="tax-info">
+            {{ invoice.seller.name }}
+            {% if invoice.seller.vat_id %} · USt-IdNr.: {{ invoice.seller.vat_id }}{% endif %}
+            {% if invoice.seller.tax_number %} · Steuernr.: {{ invoice.seller.tax_number }}{% endif %}
+        </div>
+        <div>
+            Diese Rechnung wurde elektronisch erstellt und ist ohne Unterschrift gültig.
+            {% if invoice.profile.value != "MINIMUM" %}
+            · Format: ZUGFeRD {{ invoice.profile.value }}
+            {% endif %}
+        </div>
+    </div>
+</body>
+</html>
