@@ -62,6 +62,13 @@ def cli() -> None:
     extract_parser.add_argument(
         "-o", "--output", help="Output JSON file (default: stdout)"
     )
+    extract_parser.add_argument(
+        "--llm", action="store_true",
+        help="Use LLM-based extraction for unstructured PDFs",
+    )
+
+    # --- worker ---
+    worker_parser = subparsers.add_parser("worker", help="Start the ARQ background worker")
 
     args = parser.parse_args()
 
@@ -73,6 +80,8 @@ def cli() -> None:
         _run_validate(args)
     elif args.command == "extract":
         _run_extract(args)
+    elif args.command == "worker":
+        _run_worker()
     else:
         parser.print_help()
         sys.exit(1)
@@ -184,6 +193,8 @@ def _run_validate(args: argparse.Namespace) -> None:
 
 def _run_extract(args: argparse.Namespace) -> None:
     """Extract invoice data to JSON."""
+    import asyncio
+
     from app.core.extraction.xml_extractor import XMLExtractor
 
     input_path = Path(args.input)
@@ -191,11 +202,38 @@ def _run_extract(args: argparse.Namespace) -> None:
         print(f"Error: File not found: {input_path}", file=sys.stderr)
         sys.exit(1)
 
+    invoice = None
+
+    # Try structured extraction first
     extractor = XMLExtractor()
     try:
         invoice = extractor.extract_from_file(input_path)
+        print("Extraction method: structured (CII-XML)", file=sys.stderr)
     except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
+        if not getattr(args, "llm", False):
+            print(f"Error: {e}", file=sys.stderr)
+            print("Hint: Use --llm for unstructured PDF extraction", file=sys.stderr)
+            sys.exit(1)
+
+    # Fallback: LLM extraction
+    if invoice is None and getattr(args, "llm", False):
+        try:
+            from app.core.extraction.llm_extractor import LLMExtractor
+            from app.core.extraction.pdf_extractor import PDFExtractor
+
+            pdf_ext = PDFExtractor(input_path)
+            text = pdf_ext.extract_text()
+            tables = pdf_ext.extract_tables()
+
+            llm_ext = LLMExtractor()
+            invoice = asyncio.run(llm_ext.extract(text, tables))
+            print("Extraction method: LLM-based", file=sys.stderr)
+        except Exception as e:
+            print(f"LLM extraction failed: {e}", file=sys.stderr)
+            sys.exit(1)
+
+    if invoice is None:
+        print("Error: Could not extract invoice data", file=sys.stderr)
         sys.exit(1)
 
     json_str = invoice.model_dump_json(indent=2)
@@ -205,6 +243,12 @@ def _run_extract(args: argparse.Namespace) -> None:
         print(f"Extracted to: {args.output}")
     else:
         print(json_str)
+
+
+def _run_worker() -> None:
+    """Start the ARQ background worker."""
+    import subprocess
+    subprocess.run([sys.executable, "-m", "arq", "app.worker.settings.WorkerSettings"])
 
 
 if __name__ == "__main__":

@@ -1,0 +1,41 @@
+<div class="card result-card {{ 'success' if success else 'error' }}" style="margin-top: 1rem;">
+    <h3>
+        {% if success %}
+            Erfolgreich
+        {% else %}
+            Fehler
+        {% endif %}
+    </h3>
+
+    {% if message %}
+    <p>{{ message }}</p>
+    {% endif %}
+
+    {% if errors %}
+    <ul class="error-list">
+        {% for err in errors %}
+        <li>{{ err }}</li>
+        {% endfor %}
+    </ul>
+    {% endif %}
+
+    {% if warnings %}
+    <h4>Warnungen</h4>
+    <ul class="warning-list">
+        {% for w in warnings %}
+        <li>{{ w }}</li>
+        {% endfor %}
+    </ul>
+    {% endif %}
+
+    {% if download_url %}
+    <a href="{{ download_url }}" class="btn btn-primary" download>Datei herunterladen</a>
+    {% endif %}
+
+    {% if invoice_json %}
+    <details style="margin-top: 1rem;">
+        <summary>Extrahierte Rechnungsdaten (JSON)</summary>
+        <pre><code>{{ invoice_json }}</code></pre>
+    </details>
+    {% endif %}
+</div>

@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - InvoiceForge{% endblock %}
+
+{% block content %}
+<h1>Dashboard</h1>
+
+<div class="cards">
+    <div class="card">
+        <h2>Konvertieren</h2>
+        <p>Rechnungsdaten (JSON) in ZUGFeRD PDF oder XRechnung XML umwandeln.</p>
+        <a href="/ui/convert" class="btn btn-primary">Rechnung konvertieren</a>
+    </div>
+
+    <div class="card">
+        <h2>Extrahieren</h2>
+        <p>Rechnungsdaten aus ZUGFeRD PDF, XRechnung XML oder unstrukturierten PDFs extrahieren.</p>
+        <a href="/ui/extract" class="btn btn-primary">Daten extrahieren</a>
+    </div>
+
+    <div class="card">
+        <h2>Validieren</h2>
+        <p>E-Rechnungen gegen XSD-Schema und optional KoSIT Schematron validieren.</p>
+        <a href="/ui/validate" class="btn btn-primary">XML validieren</a>
+    </div>
+</div>
+
+<div class="card" style="margin-top: 2rem;">
+    <h2>Unterstuetzte Formate</h2>
+    <table class="table">
+        <thead>
+            <tr>
+                <th>Format</th>
+                <th>Beschreibung</th>
+                <th>Status</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><strong>ZUGFeRD PDF</strong></td>
+                <td>Hybrid-PDF/A-3 mit eingebettetem CII-XML (Profil EN 16931)</td>
+                <td><span class="badge badge-success">Aktiv</span></td>
+            </tr>
+            <tr>
+                <td><strong>XRechnung CII</strong></td>
+                <td>Reines CII-XML nach XRechnung 3.0 Standard</td>
+                <td><span class="badge badge-success">Aktiv</span></td>
+            </tr>
+            <tr>
+                <td><strong>XRechnung UBL</strong></td>
+                <td>UBL 2.1 Invoice nach XRechnung 3.0 Standard</td>
+                <td><span class="badge badge-success">Aktiv</span></td>
+            </tr>
+        </tbody>
+    </table>
+</div>
+{% endblock %}

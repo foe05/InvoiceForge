@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException, UploadFile, status
 from fastapi.responses import Response
 from pydantic import BaseModel
 
+from app.config import LLMProvider, settings
 from app.core.extraction.xml_extractor import XMLExtractor
 from app.core.pipeline import ConversionPipeline
 from app.models.invoice import Invoice, OutputFormat, ZUGFeRDProfile
@@ -38,6 +39,7 @@ class ExtractResponse(BaseModel):
     job_id: str
     success: bool
     invoice: Invoice | None = None
+    extraction_method: str = "structured"
     errors: list[str] = []
 
 
@@ -45,6 +47,7 @@ class ValidateResponse(BaseModel):
     is_valid: bool
     errors: list[str] = []
     warnings: list[str] = []
+    kosit_available: bool = False
 
 
 # --- Endpoints ---
@@ -56,7 +59,7 @@ class ValidateResponse(BaseModel):
     summary="Convert invoice data to E-Rechnung",
 )
 async def convert_invoice(invoice: Invoice) -> ConvertResponse:
-    """Convert structured invoice data to ZUGFeRD PDF or XRechnung XML.
+    """Convert structured invoice data to ZUGFeRD PDF, XRechnung CII, or XRechnung UBL.
 
     Accepts a complete Invoice object (EN 16931) and returns the
     generated output as base64-encoded data.
@@ -108,16 +111,17 @@ async def convert_and_download(invoice: Invoice) -> Response:
 @router.post(
     "/extract",
     response_model=ExtractResponse,
-    summary="Extract invoice data from uploaded ZUGFeRD PDF or XRechnung XML",
+    summary="Extract invoice data from uploaded file",
 )
 async def extract_invoice(file: UploadFile) -> ExtractResponse:
-    """Upload a ZUGFeRD PDF or XRechnung XML and extract the structured
-    invoice data. Returns an Invoice model that can be modified and
-    re-submitted to /convert.
+    """Upload a ZUGFeRD PDF, XRechnung XML, or unstructured PDF and extract
+    the invoice data. Falls back to LLM-based extraction for unstructured PDFs
+    when configured.
     """
     job_id = uuid.uuid4().hex[:12]
 
-    if file.content_type not in ("application/pdf", "application/xml", "text/xml"):
+    allowed_types = ("application/pdf", "application/xml", "text/xml")
+    if file.content_type not in allowed_types:
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             detail=f"Unsupported: {file.content_type}. Use PDF or XML.",
@@ -126,15 +130,46 @@ async def extract_invoice(file: UploadFile) -> ExtractResponse:
     content = await file.read()
     suffix = ".pdf" if "pdf" in (file.content_type or "") else ".xml"
 
+    # Try structured extraction first
     try:
         with NamedTemporaryFile(suffix=suffix, delete=True) as tmp:
             tmp.write(content)
             tmp.flush()
             invoice = _xml_extractor.extract_from_file(Path(tmp.name))
-    except Exception as e:
-        return ExtractResponse(job_id=job_id, success=False, errors=[str(e)])
+        return ExtractResponse(
+            job_id=job_id, success=True, invoice=invoice, extraction_method="structured"
+        )
+    except Exception:
+        pass
 
-    return ExtractResponse(job_id=job_id, success=True, invoice=invoice)
+    # Fallback: LLM extraction for PDFs
+    if suffix == ".pdf" and settings.llm_provider != LLMProvider.NONE:
+        try:
+            from app.core.extraction.llm_extractor import LLMExtractor
+            from app.core.extraction.pdf_extractor import PDFExtractor
+
+            with NamedTemporaryFile(suffix=".pdf", delete=True) as tmp:
+                tmp.write(content)
+                tmp.flush()
+                pdf_ext = PDFExtractor(Path(tmp.name))
+                text = pdf_ext.extract_text()
+                tables = pdf_ext.extract_tables()
+
+            llm_ext = LLMExtractor()
+            invoice = await llm_ext.extract(text, tables)
+            return ExtractResponse(
+                job_id=job_id, success=True, invoice=invoice, extraction_method="llm"
+            )
+        except Exception as e:
+            return ExtractResponse(
+                job_id=job_id, success=False, errors=[f"LLM extraction failed: {e}"]
+            )
+
+    return ExtractResponse(
+        job_id=job_id,
+        success=False,
+        errors=["Could not extract structured data. Configure LLM_PROVIDER for unstructured PDFs."],
+    )
 
 
 @router.post(
@@ -143,7 +178,7 @@ async def extract_invoice(file: UploadFile) -> ExtractResponse:
     summary="Validate an E-Rechnung XML file",
 )
 async def validate_invoice(file: UploadFile) -> ValidateResponse:
-    """Upload a CII-XML for XSD validation."""
+    """Upload a CII or UBL XML for XSD validation and optional KoSIT Schematron check."""
     if file.content_type not in ("application/xml", "text/xml"):
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
@@ -152,7 +187,6 @@ async def validate_invoice(file: UploadFile) -> ValidateResponse:
 
     content = await file.read()
 
-    from drafthorse.utils import validate_xml
     from lxml import etree
 
     try:
@@ -160,12 +194,33 @@ async def validate_invoice(file: UploadFile) -> ValidateResponse:
     except etree.XMLSyntaxError as e:
         return ValidateResponse(is_valid=False, errors=[f"XML parse error: {e}"])
 
-    # XSD validation via drafthorse utility
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    # XSD validation via drafthorse (CII only – UBL passes through)
     try:
+        from drafthorse.utils import validate_xml
         validate_xml(content, schema="FACTUR-X_EN16931")
-        return ValidateResponse(is_valid=True)
     except Exception as e:
-        return ValidateResponse(is_valid=False, errors=[str(e)])
+        errors.append(f"XSD: {e}")
+
+    # KoSIT Schematron validation (if sidecar is available)
+    kosit_available = False
+    from app.core.validation.kosit_client import KoSITClient
+    client = KoSITClient()
+    if await client.is_available():
+        kosit_available = True
+        result = await client.validate(content)
+        if not result.is_valid:
+            errors.extend(result.errors)
+        warnings.extend(result.warnings)
+
+    return ValidateResponse(
+        is_valid=len(errors) == 0,
+        errors=errors,
+        warnings=warnings,
+        kosit_available=kosit_available,
+    )
 
 
 @router.get(
@@ -177,4 +232,5 @@ async def list_formats() -> dict:
     return {
         "output_formats": [{"value": f.value, "label": f.name} for f in OutputFormat],
         "zugferd_profiles": [{"value": p.value, "label": p.name} for p in ZUGFeRDProfile],
+        "llm_provider": settings.llm_provider.value,
     }
