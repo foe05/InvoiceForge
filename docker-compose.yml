@@ -3,7 +3,7 @@ services:
   api:
     build:
       context: .
-      target: runtime
+      dockerfile: Dockerfile
     container_name: invoiceforge-api
     ports:
       - "8000:8000"
@@ -35,7 +35,7 @@ services:
   ui:
     build:
       context: .
-      target: runtime
+      dockerfile: Dockerfile
     container_name: invoiceforge-ui
     command: ["streamlit", "run", "ui/streamlit_app.py", "--server.port=8501", "--server.address=0.0.0.0", "--server.headless=true"]
     ports:
@@ -65,7 +65,7 @@ services:
   worker:
     build:
       context: .
-      target: runtime
+      dockerfile: Dockerfile
     container_name: invoiceforge-worker
     command: ["python", "-m", "arq", "app.worker.settings.WorkerSettings"]
     environment:
