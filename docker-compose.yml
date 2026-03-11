@@ -18,6 +18,9 @@ services:
     volumes:
       - storage_data:/app/data/storage
       - schema_data:/app/data/schemas
+    networks:
+      - default
+      - backend
     depends_on:
       postgres:
         condition: service_healthy
@@ -50,6 +53,9 @@ services:
     volumes:
       - storage_data:/app/data/storage
       - schema_data:/app/data/schemas
+    networks:
+      - default
+      - backend
     depends_on:
       postgres:
         condition: service_healthy
@@ -78,6 +84,8 @@ services:
     volumes:
       - storage_data:/app/data/storage
       - schema_data:/app/data/schemas
+    networks:
+      - backend
     depends_on:
       postgres:
         condition: service_healthy
@@ -95,8 +103,9 @@ services:
       POSTGRES_DB: invoiceforge
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
+    # No external ports – only reachable via Docker network
+    networks:
+      - backend
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U invoiceforge"]
       interval: 5s
@@ -108,8 +117,9 @@ services:
   redis:
     image: redis:7-alpine
     container_name: invoiceforge-redis
-    ports:
-      - "6379:6379"
+    # No external ports – only reachable via Docker network
+    networks:
+      - backend
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -167,6 +177,11 @@ services:
     restart: unless-stopped
     profiles:
       - full
+
+networks:
+  backend:
+    driver: bridge
+    internal: true
 
 volumes:
   postgres_data:
