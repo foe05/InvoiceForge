@@ -93,7 +93,9 @@ class CIIGenerator:
 
         if inv.note:
             note = IncludedNote()
-            note.content.add(inv.note)
+            # IncludedNote.content is a StringField — assign it. Only
+            # header.notes is a Container that takes .add().
+            note.content = inv.note
             doc.header.notes.add(note)
 
         # --- Seller (BG-4) ---
