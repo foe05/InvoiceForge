@@ -90,6 +90,26 @@ def test_malformed_tokens_are_rejected(bad_token):
     assert read_reset_token(bad_token) is None
 
 
+@pytest.mark.parametrize(
+    "mangle",
+    [
+        lambda t: f"  {t}  ",  # leading/trailing padding
+        lambda t: t[:40] + "  " + t[40:],  # terminal line-wrap mid-token
+        lambda t: t[:30] + "\n" + t[30:],  # newline from a wrapped paste
+        lambda t: t[:20] + " \t " + t[20:],
+    ],
+    ids=["padded", "wrapped", "newline", "mixed"],
+)
+def test_whitespace_from_copy_paste_is_tolerated(mangle):
+    """A link copied out of a wrapped terminal must still resolve."""
+    user = _user()
+    token = generate_reset_token(user)
+    parsed = read_reset_token(mangle(token))
+
+    assert parsed is not None
+    assert parsed[0] == str(user.id)
+
+
 def test_signature_tampering_is_rejected():
     token = generate_reset_token(_user())
     assert read_reset_token(token[:-4] + "AAAA") is None

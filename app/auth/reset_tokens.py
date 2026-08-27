@@ -70,6 +70,11 @@ def read_reset_token(token: str) -> tuple[str, str] | None:
     *not* mean the token matches a user — the caller must still load the user
     and compare the fingerprint via `token_matches_user`.
     """
+    # Reset links get copied out of terminals and chat clients, which happily
+    # insert line-wrap whitespace mid-token. base64url never contains
+    # whitespace, so dropping all of it can only repair, never weaken.
+    token = "".join(token.split())
+
     try:
         # Load against the hard ceiling first, then enforce the token's own TTL.
         payload, timestamp = _serializer().loads(
