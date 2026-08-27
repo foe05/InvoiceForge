@@ -20,6 +20,9 @@ services:
       - KOSIT_VALIDATOR_URL=http://kosit-validator:8080
       - STORAGE_BASE_PATH=/app/data/storage
       - SCHEMA_DIR=/app/data/schemas
+      # Origin used to build password-reset links on the CLI, which has no
+      # request to derive it from. Override in .env if the hostname changes.
+      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-https://erechnung.broetzens.de}
     volumes:
       - storage_data:/app/data/storage
       - schema_data:/app/data/schemas
