@@ -7,10 +7,13 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.sessions import SessionMiddleware
 
 from app import __version__
+from app.api.auth_routes import router as auth_router
 from app.api.v1.router import api_router
 from app.api.ui_routes import router as ui_router
+from app.auth.dependencies import install_redirect_handler
 from app.config import settings
 from app.logging_config import setup_logging
 
@@ -38,6 +41,24 @@ app = FastAPI(
     redoc_url="/api/redoc",
     openapi_url="/api/openapi.json",
 )
+
+# Cookie session for browser-based authentication. Signed with app_secret_key
+# via itsdangerous. Cookie is HttpOnly + SameSite=lax; we set https_only=True
+# in production so it never travels over plain HTTP.
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=settings.app_secret_key,
+    session_cookie="invoiceforge_session",
+    max_age=60 * 60 * 24 * 7,  # 1 week
+    same_site="lax",
+    https_only=not settings.is_development,
+)
+
+# Convert auth-redirect exceptions raised inside Depends() into 302 responses.
+install_redirect_handler(app)
+
+# Auth routes (login / logout / password change)
+app.include_router(auth_router)
 
 # API routes
 app.include_router(api_router, prefix="/api/v1")

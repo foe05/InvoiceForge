@@ -81,8 +81,34 @@ def setup_logging() -> None:
     root_logger.setLevel(log_level)
     root_logger.addHandler(handler)
 
-    # Quiet noisy third-party loggers
-    for name in ("httpx", "httpcore", "asyncio", "urllib3", "sqlalchemy.engine"):
+    # Quiet noisy third-party loggers.
+    # fontTools/weasyprint/factur-x emit dozens of INFO lines per PDF render;
+    # they're only useful when actively debugging font/PDF issues.
+    for name in (
+        "httpx",
+        "httpcore",
+        "asyncio",
+        "urllib3",
+        "sqlalchemy.engine",
+        "fontTools",
+        "fontTools.subset",
+        "fontTools.ttLib",
+        "weasyprint",
+        "factur-x",
+    ):
         logging.getLogger(name).setLevel(logging.WARNING)
 
+    # Drop healthcheck spam from uvicorn's access log (15s interval × 1440 min/day
+    # = ~5760 lines/day per service). Errors on /health still surface via the
+    # error logger and via Docker's healthcheck status.
+    logging.getLogger("uvicorn.access").addFilter(_HealthCheckFilter())
+
     logging.getLogger("app").setLevel(log_level)
+
+
+class _HealthCheckFilter(logging.Filter):
+    """Suppress access-log lines for the /health endpoint."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        return "/health" not in message and "/healthz" not in message

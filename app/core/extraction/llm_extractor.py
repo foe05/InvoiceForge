@@ -1,8 +1,9 @@
 """LLM-based intelligent invoice data extraction.
 
-Uses Claude (Anthropic API) or Ollama for semantic field extraction from
-unstructured PDF text/tables. This is the "brain" that converts raw extracted
-text into structured Invoice data following EN 16931.
+Uses Claude (Anthropic API) or any OpenAI-compatible chat-completions endpoint
+(IONOS AI Model Hub, vLLM, LiteLLM-Proxy, Together.ai, Groq, ...) for semantic
+field extraction from unstructured PDF text/tables. This is the "brain" that
+converts raw extracted text into structured Invoice data following EN 16931.
 """
 
 from __future__ import annotations
@@ -127,15 +128,15 @@ class LLMExtractor:
         if self.provider == LLMProvider.NONE:
             raise ValueError(
                 "No LLM provider configured. "
-                "Set LLM_PROVIDER=anthropic or LLM_PROVIDER=ollama in .env"
+                "Set LLM_PROVIDER=anthropic or LLM_PROVIDER=openai_compatible in .env"
             )
 
         prompt = self._build_prompt(text, tables)
 
         if self.provider == LLMProvider.ANTHROPIC:
             raw_json = await self._call_anthropic(prompt)
-        elif self.provider == LLMProvider.OLLAMA:
-            raw_json = await self._call_ollama(prompt)
+        elif self.provider == LLMProvider.OPENAI_COMPATIBLE:
+            raw_json = await self._call_openai_compatible(prompt)
         else:
             raise ValueError(f"Unknown LLM provider: {self.provider}")
 
@@ -167,23 +168,47 @@ class LLMExtractor:
         )
         return message.content[0].text
 
-    async def _call_ollama(self, prompt: str) -> str:
-        """Call a local LLM via Ollama API."""
+    async def _call_openai_compatible(self, prompt: str) -> str:
+        """Call an OpenAI-compatible /chat/completions endpoint.
+
+        Configured via LLM_API_BASE_URL, LLM_API_KEY and LLM_MODEL. The default
+        targets the IONOS AI Model Hub. response_format=json_object is
+        requested when the server supports it; the parser additionally strips
+        Markdown fences as a defensive fallback.
+        """
         import httpx
 
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            response = await client.post(
-                f"{settings.ollama_base_url}/api/generate",
-                json={
-                    "model": "llama3.1",
-                    "system": _SYSTEM_PROMPT,
-                    "prompt": prompt,
-                    "stream": False,
-                    "format": "json",
-                },
-            )
+        if not settings.llm_api_key:
+            raise ValueError("LLM_API_KEY not configured")
+        if not settings.llm_api_base_url:
+            raise ValueError("LLM_API_BASE_URL not configured")
+
+        url = f"{settings.llm_api_base_url.rstrip('/')}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {settings.llm_api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": settings.llm_model,
+            "messages": [
+                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            "max_tokens": 4096,
+            "temperature": 0.0,
+            "response_format": {"type": "json_object"},
+        }
+
+        async with httpx.AsyncClient(timeout=settings.llm_request_timeout) as client:
+            response = await client.post(url, headers=headers, json=payload)
+            # Some OpenAI-compatible servers reject `response_format` with 400.
+            # Retry once without it; the system prompt already enforces JSON.
+            if response.status_code == 400 and "response_format" in response.text:
+                payload.pop("response_format", None)
+                response = await client.post(url, headers=headers, json=payload)
             response.raise_for_status()
-            return response.json()["response"]
+            data = response.json()
+            return data["choices"][0]["message"]["content"]
 
     def _parse_response(self, raw_json: str) -> Invoice:
         """Parse the LLM JSON response into an Invoice model."""

@@ -34,7 +34,10 @@ def upgrade() -> None:
         ),
     )
 
-    # Invoice status enum
+    # Invoice status enum.
+    # create_type=False prevents op.create_table() below from emitting a second
+    # CREATE TYPE (which would crash on retry); the explicit .create() with
+    # checkfirst=True handles the idempotent first creation.
     invoice_status = postgresql.ENUM(
         "pending",
         "extracting",
@@ -44,7 +47,7 @@ def upgrade() -> None:
         "completed",
         "failed",
         name="invoice_status",
-        create_type=True,
+        create_type=False,
     )
     invoice_status.create(op.get_bind(), checkfirst=True)
 

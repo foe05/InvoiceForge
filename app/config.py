@@ -16,7 +16,9 @@ class Environment(str, Enum):
 class LLMProvider(str, Enum):
     NONE = "none"
     ANTHROPIC = "anthropic"
-    OLLAMA = "ollama"
+    # Generic OpenAI-compatible /v1/chat/completions endpoint.
+    # Covers IONOS AI Model Hub, vLLM, LiteLLM-Proxy, Together.ai, Groq, etc.
+    OPENAI_COMPATIBLE = "openai_compatible"
 
 
 class Settings(BaseSettings):
@@ -30,14 +32,14 @@ class Settings(BaseSettings):
     app_env: Environment = Environment.DEVELOPMENT
     app_debug: bool = False
     app_secret_key: str = "change-me-in-production"
+    # Public origin used to build password-reset links on the CLI, which has no
+    # request context to derive it from. No trailing slash.
+    public_base_url: str = "http://localhost:8000"
 
     # Database
     database_url: str = (
         "postgresql+asyncpg://invoiceforge:invoiceforge@localhost:5432/invoiceforge"
     )
-
-    # Redis
-    redis_url: str = "redis://localhost:6379/0"
 
     # KoSIT Validator
     kosit_validator_url: str = "http://localhost:8080"
@@ -62,7 +64,12 @@ class Settings(BaseSettings):
     # LLM
     llm_provider: LLMProvider = LLMProvider.NONE
     anthropic_api_key: str = ""
-    ollama_base_url: str = "http://localhost:11434"
+    # OpenAI-compatible providers (IONOS AI Model Hub by default).
+    # Base URL must end with /v1 (the /chat/completions suffix is appended in code).
+    llm_api_base_url: str = "https://openai.inference.de-txl.ionos.com/v1"
+    llm_api_key: str = ""
+    llm_model: str = "meta-llama/Llama-3.3-70B-Instruct"
+    llm_request_timeout: float = 120.0
 
     # OCR
     tesseract_cmd: str = "tesseract"

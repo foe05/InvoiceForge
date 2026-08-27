@@ -37,6 +37,10 @@ class ConversionResult:
     output_format: OutputFormat = OutputFormat.ZUGFERD_PDF
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    # "original" if pdf_bytes is the user's source PDF with XML embedded,
+    # "rerender" if it was generated from the Jinja invoice template,
+    # None if no PDF was produced.
+    pdf_source: str | None = None
 
     @property
     def success(self) -> bool:
@@ -71,14 +75,34 @@ class ConversionPipeline:
             self._validator = InvoiceValidator(kosit_url=settings.kosit_validator_url)
         return self._validator
 
-    def convert(self, invoice: Invoice) -> ConversionResult:
+    def convert(
+        self,
+        invoice: Invoice,
+        source_pdf_bytes: bytes | None = None,
+        force_rerender: bool = False,
+    ) -> ConversionResult:
         """Run the full conversion pipeline.
 
         Steps:
             1. Generate XML (CII for ZUGFeRD/XRechnung-CII, UBL for XRechnung-UBL)
             2. Validate generated XML (XSD + Schematron)
-            3. If ZUGFeRD PDF requested: render visual PDF, embed CII-XML
+            3. If ZUGFeRD PDF requested:
+                - if source_pdf_bytes is given and not force_rerender, embed XML
+                  into that original PDF; on failure fall back to a rerendered
+                  visual PDF and emit a warning
+                - otherwise (or after fallback) render visual PDF from template
+                  and embed XML
             4. Return result with validation info
+
+        Args:
+            invoice: The semantic invoice to convert.
+            source_pdf_bytes: Optional original PDF bytes (e.g., the user's
+                uploaded invoice). When set and the output format is
+                ZUGFERD_PDF, the XML is embedded into these bytes verbatim,
+                preserving the original visual appearance.
+            force_rerender: If True, always render a fresh visual PDF from the
+                Jinja template, ignoring source_pdf_bytes. Use when strict
+                PDF/A-3 conformance is required.
 
         Returns:
             ConversionResult with XML bytes, optionally PDF bytes, and validation info.
@@ -87,6 +111,7 @@ class ConversionPipeline:
         warnings: list[str] = []
         xml_bytes = b""
         pdf_bytes: bytes | None = None
+        pdf_source: str | None = None
         validation: FullValidationResult | None = None
 
         # Step 1: Generate XML based on output format
@@ -144,14 +169,33 @@ class ConversionPipeline:
                 logger.warning("Validierung übersprungen: %s", e)
                 warnings.append(f"Validierung konnte nicht durchgeführt werden: {e}")
 
-        # Step 3: If ZUGFeRD PDF, render visual PDF and embed XML
+        # Step 3: If ZUGFeRD PDF, embed XML into a visual PDF
         if invoice.output_format == OutputFormat.ZUGFERD_PDF:
-            try:
-                visual_pdf = self.pdf_renderer.render_pdf(invoice)
-                zugferd_gen = ZUGFeRDGenerator(invoice)
-                pdf_bytes = zugferd_gen.generate_from_pdf_bytes(visual_pdf)
-            except Exception as e:
-                errors.append(f"ZUGFeRD-PDF-Generierung fehlgeschlagen: {e}")
+            zugferd_gen = ZUGFeRDGenerator(invoice)
+
+            use_original = source_pdf_bytes is not None and not force_rerender
+            if use_original:
+                try:
+                    pdf_bytes = zugferd_gen.generate_from_pdf_bytes(source_pdf_bytes)
+                    pdf_source = "original"
+                except Exception as e:
+                    logger.warning(
+                        "Einbettung ins Original-PDF fehlgeschlagen, fallback auf Rerender: %s", e
+                    )
+                    warnings.append(
+                        "Einbettung in Original-PDF fehlgeschlagen "
+                        f"({e}). Visual-PDF aus Template erzeugt — "
+                        "Optik weicht vom Original ab."
+                    )
+                    use_original = False  # fall through to rerender
+
+            if not use_original:
+                try:
+                    visual_pdf = self.pdf_renderer.render_pdf(invoice)
+                    pdf_bytes = zugferd_gen.generate_from_pdf_bytes(visual_pdf)
+                    pdf_source = "rerender"
+                except Exception as e:
+                    errors.append(f"ZUGFeRD-PDF-Generierung fehlgeschlagen: {e}")
 
         return ConversionResult(
             invoice=invoice,
@@ -161,6 +205,7 @@ class ConversionPipeline:
             output_format=invoice.output_format,
             errors=errors,
             warnings=warnings,
+            pdf_source=pdf_source,
         )
 
     def convert_to_file(

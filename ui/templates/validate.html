@@ -5,15 +5,19 @@
 <h1>E-Rechnung validieren</h1>
 
 <div class="card">
+    <p style="color:#666;">
+        Akzeptiert CII- oder UBL-XML sowie ZUGFeRD-/Factur-X-PDFs (eingebettete XML wird automatisch ausgepackt).
+        Geprüft wird gegen XSD, offline Schematron und – falls verfügbar – den KoSIT-Validator.
+    </p>
     <form hx-post="/ui/validate" hx-target="#validate-result" hx-encoding="multipart/form-data">
         <div class="form-group">
-            <label for="validate-file">XML-Datei hochladen (CII oder UBL)</label>
-            <input type="file" id="validate-file" name="file" accept=".xml" required>
+            <label for="validate-file">Datei hochladen (XML oder PDF)</label>
+            <input type="file" id="validate-file" name="file" accept=".xml,.pdf" required>
         </div>
         <div class="form-group">
             <label>
                 <input type="checkbox" name="use_kosit" value="true" checked>
-                KoSIT Schematron-Validierung (erfordert Docker-Sidecar)
+                KoSIT-Validator zusätzlich aufrufen (erfordert Docker-Sidecar, sonst übersprungen)
             </label>
         </div>
         <button type="submit" class="btn btn-primary">

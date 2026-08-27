@@ -23,7 +23,7 @@ WORKDIR /build
 
 COPY pyproject.toml README.md ./
 COPY app/__init__.py ./app/
-RUN pip install --no-cache-dir --prefix=/install ".[ocr,ui]"
+RUN pip install --no-cache-dir --prefix=/install ".[ocr]"
 
 
 # --- Stage 2: Runtime image ---
@@ -53,8 +53,19 @@ COPY ui/ ./ui/
 COPY scripts/ ./scripts/
 COPY pyproject.toml README.md alembic.ini docker-entrypoint.sh ./
 
-# Install the app package itself (dependencies already installed from builder)
-RUN pip install --no-cache-dir --no-deps .
+# Install the app package itself (dependencies already installed from builder).
+#
+# This MUST be an editable install. A regular install copies app/ into
+# site-packages, giving the image two copies of the code: uvicorn runs with
+# cwd=/app and imports /app/app, while the `invoiceforge` console script has no
+# cwd on sys.path and imports the site-packages copy. They agree on a fresh
+# build and drift apart the moment anything touches one of them.
+# Editable keeps /app/app as the single source — alembic.ini's
+# `script_location = app/db/migrations` depends on that path existing anyway.
+# Build isolation stays on so pip provides hatchling and its `editables`
+# helper; --no-deps keeps it from touching the runtime deps already staged
+# from the builder image.
+RUN pip install --no-cache-dir --no-deps -e .
 
 # Create directories
 RUN mkdir -p /app/data/storage /app/data/schemas && \
@@ -62,8 +73,7 @@ RUN mkdir -p /app/data/storage /app/data/schemas && \
 
 EXPOSE 8000 8501
 
-HEALTHCHECK --interval=15s --timeout=5s --retries=3 --start-period=10s \
-    CMD curl -f http://localhost:8000/health || exit 1
+# Healthchecks are defined per-service in docker-compose.yml.
 
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
