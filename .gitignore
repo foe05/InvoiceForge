@@ -35,3 +35,7 @@ data/storage/
 # OS
 .DS_Store
 Thumbs.db
+
+# Claude Code / claude-flow local state
+.claude-flow/
+.claude/

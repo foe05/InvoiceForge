@@ -46,14 +46,15 @@ dependencies = [
     "jinja2>=3.1,<4",
     # File uploads
     "python-multipart>=0.0.18,<1",
-    # Background jobs
-    "arq>=0.26,<1",
     # HTTP client (WebDAV, etc.)
     "httpx>=0.28,<1",
     # XML processing
     "lxml>=5.3,<6",
     # CLI
     "typer>=0.15,<1",
+    # Auth (password hashing + signed session cookies)
+    "bcrypt>=4.1,<6",
+    "itsdangerous>=2.2,<3",
 ]
 
 [project.optional-dependencies]
@@ -66,9 +67,6 @@ llm = [
 ]
 invoice2data = [
     "invoice2data>=0.4,<1",
-]
-ui = [
-    "streamlit>=1.40,<2",
 ]
 dev = [
     "pytest>=8,<9",

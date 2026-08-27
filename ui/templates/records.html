@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+
+{% block title %}Historie &mdash; InvoiceForge{% endblock %}
+
+{% block content %}
+<h1>Konvertierungs-Historie</h1>
+<p style="color:#666;">Alle Konvertierungen und Extraktionen deines Mandanten, neueste zuerst.</p>
+
+{% if db_error %}
+<div style="background:#fed7d7; color:#742a2a; padding:0.7rem; border-radius:4px;">
+    Datenbank nicht verfügbar: {{ db_error }}
+</div>
+{% elif not records %}
+<div style="background:#edf2f7; color:#4a5568; padding:1rem; border-radius:4px;">
+    Noch keine Datensätze vorhanden. Sobald du eine Rechnung konvertierst oder extrahierst,
+    erscheint sie hier.
+</div>
+{% else %}
+<table style="width:100%; border-collapse:collapse; margin-top:1rem;">
+    <thead>
+        <tr style="background:#f7fafc; text-align:left;">
+            <th style="padding:0.5rem; border-bottom:2px solid #e2e8f0;">Status</th>
+            <th style="padding:0.5rem; border-bottom:2px solid #e2e8f0;">Rechnungsnr.</th>
+            <th style="padding:0.5rem; border-bottom:2px solid #e2e8f0;">Verkäufer</th>
+            <th style="padding:0.5rem; border-bottom:2px solid #e2e8f0;">Käufer</th>
+            <th style="padding:0.5rem; border-bottom:2px solid #e2e8f0; text-align:right;">Betrag</th>
+            <th style="padding:0.5rem; border-bottom:2px solid #e2e8f0;">Format</th>
+            <th style="padding:0.5rem; border-bottom:2px solid #e2e8f0;">Gültig</th>
+            <th style="padding:0.5rem; border-bottom:2px solid #e2e8f0;">Erstellt</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for r in records %}
+        <tr style="border-bottom:1px solid #edf2f7;">
+            <td style="padding:0.5rem;">
+                {% if r.status == 'completed' %}<span style="color:#22543d;">✓ {{ r.status }}</span>
+                {% elif r.status == 'failed' %}<span style="color:#742a2a;">✗ {{ r.status }}</span>
+                {% else %}<span style="color:#7b341e;">⏳ {{ r.status }}</span>{% endif %}
+            </td>
+            <td style="padding:0.5rem; font-family:monospace; font-size:0.9rem;">{{ r.invoice_number }}</td>
+            <td style="padding:0.5rem;">{{ r.seller_name }}</td>
+            <td style="padding:0.5rem;">{{ r.buyer_name }}</td>
+            <td style="padding:0.5rem; text-align:right; font-variant-numeric:tabular-nums;">
+                {{ "%.2f"|format(r.gross_amount) }} {{ r.currency }}
+            </td>
+            <td style="padding:0.5rem; font-size:0.85rem; color:#4a5568;">{{ r.output_format }}</td>
+            <td style="padding:0.5rem;">
+                {% if r.is_valid is true %}✓
+                {% elif r.is_valid is false %}✗
+                {% else %}-{% endif %}
+            </td>
+            <td style="padding:0.5rem; font-size:0.85rem; color:#666;">
+                {{ r.created_at.strftime('%Y-%m-%d %H:%M') if r.created_at else '-' }}
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+<p style="color:#999; font-size:0.85rem; margin-top:1rem;">
+    {{ records|length }} Einträge angezeigt (max. 200).
+</p>
+{% endif %}
+{% endblock %}

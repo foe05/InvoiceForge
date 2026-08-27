@@ -12,6 +12,35 @@ class Base(DeclarativeBase):
     """Base class for all ORM models."""
 
 
+class User(Base):
+    """A login identity tied to exactly one tenant (1:1 — see ADR/multi-user).
+
+    Created exclusively via the `invoiceforge user create` CLI by an admin.
+    The admin sets an initial password; on first login the user is forced
+    through `/account/password` to choose their own.
+    """
+
+    __tablename__ = "users"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, unique=True
+    )
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    must_change_password: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    last_login_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    tenant: Mapped["Tenant"] = relationship("Tenant", lazy="joined")
+
+
 class Tenant(Base):
     """Multi-tenant support – each tenant has isolated data.
 

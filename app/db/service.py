@@ -15,7 +15,8 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import InvoiceRecord, Tenant
+from app.auth.passwords import hash_password, verify_password
+from app.db.models import InvoiceRecord, Tenant, User
 from app.models.invoice import Invoice
 
 
@@ -249,3 +250,88 @@ class InvoiceService:
         if record is None or record.invoice_data_json is None:
             return None
         return Invoice.model_validate_json(record.invoice_data_json)
+
+
+class UserService:
+    """User CRUD + authentication."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def create_user_with_tenant(
+        self,
+        email: str,
+        password: str,
+        company_name: str | None = None,
+        is_admin: bool = False,
+        must_change_password: bool = True,
+    ) -> tuple[User, Tenant, str]:
+        """Create a new User and an associated Tenant in a single transaction.
+
+        Returns (user, tenant, api_key). The API key is also stored hashed on
+        the tenant — the plain version is only returned here for display.
+        """
+        # Auto-derive a tenant slug from the email local-part.
+        local = email.split("@", 1)[0].lower()
+        slug = "".join(c if c.isalnum() else "-" for c in local).strip("-")
+        if not slug:
+            raise ValueError(f"Cannot derive tenant slug from email: {email}")
+
+        # Make slug unique if collision.
+        existing = await self.session.execute(
+            select(Tenant).where(Tenant.slug == slug)
+        )
+        if existing.scalar_one_or_none() is not None:
+            slug = f"{slug}-{secrets.token_hex(3)}"
+
+        api_key = _generate_api_key()
+        tenant = Tenant(
+            id=uuid.uuid4(),
+            name=company_name or email,
+            slug=slug,
+            api_key_hash=_hash_api_key(api_key),
+            is_active=True,
+        )
+        self.session.add(tenant)
+        await self.session.flush()  # need tenant.id
+
+        user = User(
+            id=uuid.uuid4(),
+            email=email.lower(),
+            password_hash=hash_password(password),
+            tenant_id=tenant.id,
+            is_admin=is_admin,
+            is_active=True,
+            must_change_password=must_change_password,
+        )
+        self.session.add(user)
+        await self.session.flush()
+        return user, tenant, api_key
+
+    async def get_by_email(self, email: str) -> User | None:
+        result = await self.session.execute(
+            select(User).where(User.email == email.lower())
+        )
+        return result.scalar_one_or_none()
+
+    async def authenticate(self, email: str, password: str) -> User | None:
+        user = await self.get_by_email(email)
+        if user is None or not user.is_active:
+            return None
+        if not verify_password(password, user.password_hash):
+            return None
+        return user
+
+    async def change_password(self, user: User, new_password: str) -> None:
+        user.password_hash = hash_password(new_password)
+        user.must_change_password = False
+
+    async def touch_last_login(self, user: User) -> None:
+        user.last_login_at = datetime.now(timezone.utc)
+
+    async def list_users(self) -> list[User]:
+        result = await self.session.execute(select(User).order_by(User.email))
+        return list(result.scalars().all())
+
+    async def set_active(self, user: User, active: bool) -> None:
+        user.is_active = active

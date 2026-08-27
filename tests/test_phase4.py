@@ -474,7 +474,9 @@ class TestDockerConfig:
         assert "profiles:" in content
         assert "full" in content
 
-    def test_worker_command_correct(self):
-        """Worker service uses correct ARQ module path."""
+    def test_no_worker_or_redis_services(self):
+        """Worker and Redis were removed in favour of synchronous request handling."""
         content = Path("docker-compose.yml").read_text()
-        assert "app.worker.settings.WorkerSettings" in content
+        assert "invoiceforge-worker" not in content
+        assert "invoiceforge-redis" not in content
+        assert "WorkerSettings" not in content

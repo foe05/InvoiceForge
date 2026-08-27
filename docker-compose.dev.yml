@@ -11,40 +11,14 @@ services:
       - APP_ENV=development
       - APP_DEBUG=true
       - DATABASE_URL=sqlite+aiosqlite:///app/data/invoiceforge.db
-      - REDIS_URL=redis://redis:6379/0
       - STORAGE_BASE_PATH=/app/data/storage
       - SCHEMA_DIR=/app/data/schemas
     volumes:
       - ./app:/app/app
       - ./ui:/app/ui
       - ./data:/app/data
-    depends_on:
-      redis:
-        condition: service_healthy
-    # No postgres dependency in dev mode (SQLite)
-
-  ui:
-    command: ["streamlit", "run", "ui/streamlit_app.py", "--server.port=8501", "--server.address=0.0.0.0", "--server.headless=true", "--server.runOnSave=true"]
-    environment:
-      - APP_ENV=development
-      - APP_DEBUG=true
-      - DATABASE_URL=sqlite+aiosqlite:///app/data/invoiceforge.db
-    volumes:
-      - ./app:/app/app
-      - ./ui:/app/ui
-      - ./data:/app/data
     depends_on: []
-
-  worker:
-    environment:
-      - APP_ENV=development
-      - DATABASE_URL=sqlite+aiosqlite:///app/data/invoiceforge.db
-    volumes:
-      - ./app:/app/app
-      - ./data:/app/data
-    depends_on:
-      redis:
-        condition: service_healthy
+    # No postgres dependency in dev mode (SQLite)
 
   # Disable PostgreSQL in dev mode (use SQLite)
   postgres:

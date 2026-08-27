@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Anmeldung &mdash; InvoiceForge</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <style>
+        body { display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; background: #f4f6f8; }
+        .login-card { background: #fff; padding: 2rem 2.5rem; border-radius: 8px; box-shadow: 0 4px 24px rgba(0,0,0,0.08); width: 100%; max-width: 420px; }
+        .login-card h1 { margin: 0 0 0.25rem 0; font-size: 1.5rem; }
+        .login-card .subtitle { color: #666; margin-bottom: 1.5rem; font-size: 0.9rem; }
+        .login-card label { display: block; margin-top: 1rem; font-size: 0.9rem; font-weight: 500; }
+        .login-card input[type=email], .login-card input[type=password] { width: 100%; padding: 0.6rem; margin-top: 0.25rem; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; font-size: 1rem; }
+        .login-card button { margin-top: 1.5rem; width: 100%; padding: 0.7rem; border: none; background: #2c5282; color: #fff; border-radius: 4px; font-size: 1rem; font-weight: 500; cursor: pointer; }
+        .login-card button:hover { background: #2a4365; }
+        .error { background: #fed7d7; color: #742a2a; padding: 0.7rem; border-radius: 4px; margin-top: 1rem; font-size: 0.9rem; }
+        .footer-note { text-align: center; margin-top: 1.5rem; color: #999; font-size: 0.8rem; }
+    </style>
+</head>
+<body>
+    <div class="login-card">
+        <h1>InvoiceForge</h1>
+        <p class="subtitle">Bitte mit E-Mail und Passwort anmelden.</p>
+
+        {% if error %}<div class="error">{{ error }}</div>{% endif %}
+
+        <form method="post" action="/login">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="next" value="{{ next }}">
+
+            <label for="email">E-Mail</label>
+            <input type="email" id="email" name="email" autocomplete="username" required autofocus>
+
+            <label for="password">Passwort</label>
+            <input type="password" id="password" name="password" autocomplete="current-password" required>
+
+            <button type="submit">Anmelden</button>
+        </form>
+
+        <div class="footer-note">v{{ version }}</div>
+    </div>
+</body>
+</html>

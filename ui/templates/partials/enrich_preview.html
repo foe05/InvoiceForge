@@ -1,0 +1,38 @@
+<div class="card result-card success" style="margin-top: 1rem;">
+    <h3>Vorschau der erkannten Daten</h3>
+    <p>
+        Extraktionsmethode: <strong>{{ method }}</strong>.
+        {% if method == "llm" %}
+        Bitte prüfe die Felder, bevor das ZUGFeRD-PDF erzeugt wird — LLMs können sich vertun.
+        {% endif %}
+    </p>
+
+    <dl style="display:grid; grid-template-columns: max-content 1fr; gap:0.25rem 1rem; margin:0.5rem 0 1rem 0;">
+        <dt>Rechnungsnummer</dt><dd>{{ invoice.invoice_number }}</dd>
+        <dt>Verkäufer</dt><dd>{{ invoice.seller.name }}</dd>
+        <dt>Käufer</dt><dd>{{ invoice.buyer.name }}</dd>
+        <dt>Brutto</dt><dd>{{ invoice.gross_amount }} {{ invoice.currency }}</dd>
+        <dt>Datum</dt><dd>{{ invoice.invoice_date }}</dd>
+    </dl>
+
+    <form hx-post="/ui/enrich/finalize" hx-target="#enrich-result">
+        <input type="hidden" name="src_id" value="{{ src_id }}">
+        <input type="hidden" name="profile" value="{{ profile }}">
+        {% if force_rerender %}<input type="hidden" name="force_rerender" value="on">{% endif %}
+
+        <details>
+            <summary>Vollständiges JSON anzeigen / korrigieren</summary>
+            <div class="form-group" style="margin-top:0.5rem;">
+                <textarea name="invoice_json" rows="20" style="font-family: monospace; width:100%;">{{ invoice_json }}</textarea>
+            </div>
+        </details>
+
+        <div style="margin-top: 1rem; display:flex; gap:0.5rem; align-items:center;">
+            <button type="submit" class="btn btn-primary">
+                <span class="htmx-indicator spinner"></span>
+                ZUGFeRD-PDF erzeugen
+            </button>
+            <small style="color:#666;">Quell-PDF wird 30 Minuten zwischengespeichert.</small>
+        </div>
+    </form>
+</div>

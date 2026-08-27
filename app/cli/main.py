@@ -5,6 +5,7 @@ Usage:
     invoiceforge convert --input nextcloud://Rechnungen/Eingang/rechnung.pdf --format xrechnung
     invoiceforge validate --file rechnung.xml
     invoiceforge extract --input rechnung.pdf --llm
+    invoiceforge enrich --input rechnung.pdf --output out/
     invoiceforge tenant create --name "Mein Unternehmen" --config tenant.json
     invoiceforge tenant list
     invoiceforge serve --host 0.0.0.0 --port 8000
@@ -33,6 +34,9 @@ app = typer.Typer(
 
 tenant_app = typer.Typer(help="Mandanten verwalten (CRUD)")
 app.add_typer(tenant_app, name="tenant")
+
+user_app = typer.Typer(help="Benutzer verwalten (CRUD)")
+app.add_typer(user_app, name="user")
 
 # --- nextcloud:// URI support ---
 
@@ -390,6 +394,78 @@ def extract(
 
 
 @app.command()
+def enrich(
+    input: Annotated[str, typer.Option("--input", "-i", help="Eingabe-PDF")],
+    output: Annotated[str, typer.Option("--output", "-o", help="Zielordner für die ZUGFeRD-PDF")],
+    profile: Annotated[str, typer.Option("--profile", help="ZUGFeRD-Profil")] = "EN 16931",
+    force_rerender: Annotated[
+        bool,
+        typer.Option(
+            "--force-rerender/--keep-original",
+            help="Visual-PDF aus Vorlage erzwingen (PDF/A-3 garantiert) statt Original-PDF zu nutzen",
+        ),
+    ] = False,
+) -> None:
+    """PDF-Rechnung anreichern: Daten extrahieren und CII-XML in das Original-PDF einbetten.
+
+    Bei Einbettungsfehlern wird automatisch ein Visual-PDF aus der Vorlage erzeugt
+    und die Ursache als Warnung ausgegeben.
+    """
+    from app.core.extraction.chain import ExtractionFailed, run_extraction_chain
+    from app.core.pipeline import ConversionPipeline
+
+    input_path = Path(input)
+    if not input_path.exists():
+        typer.echo(f"Fehler: Datei nicht gefunden: {input_path}", err=True)
+        raise typer.Exit(code=1)
+    if input_path.suffix.lower() != ".pdf":
+        typer.echo("Fehler: Anreichern unterstützt nur PDF-Eingaben.", err=True)
+        raise typer.Exit(code=1)
+
+    content = input_path.read_bytes()
+
+    try:
+        ex = asyncio.run(run_extraction_chain(content, ".pdf"))
+    except ExtractionFailed as e:
+        typer.echo(f"Extraktion fehlgeschlagen: {e}", err=True)
+        raise typer.Exit(code=1) from None
+
+    typer.echo(f"Extraktionsmethode: {ex.method}", err=True)
+
+    invoice = ex.invoice
+    invoice.output_format = OutputFormat.ZUGFERD_PDF
+    try:
+        invoice.profile = ZUGFeRDProfile(profile)
+    except ValueError:
+        typer.echo(f"Unbekanntes Profil: {profile}", err=True)
+        raise typer.Exit(code=1) from None
+
+    pipeline = ConversionPipeline()
+    result = pipeline.convert(
+        invoice,
+        source_pdf_bytes=None if force_rerender else content,
+        force_rerender=force_rerender,
+    )
+
+    for w in result.warnings:
+        typer.echo(f"Warnung: {w}", err=True)
+
+    if not result.success or not result.pdf_bytes:
+        for err in result.errors:
+            typer.echo(f"Fehler: {err}", err=True)
+        raise typer.Exit(code=1)
+
+    out_dir = Path(output)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    safe_name = invoice.invoice_number.replace("/", "_").replace(" ", "_")
+    out_path = out_dir / f"{safe_name}_zugferd.pdf"
+    out_path.write_bytes(result.pdf_bytes)
+
+    src_label = "Original" if result.pdf_source == "original" else "Visual-Rerender"
+    typer.echo(f"ZUGFeRD-PDF geschrieben ({src_label}): {out_path}")
+
+
+@app.command()
 def serve(
     host: Annotated[str, typer.Option(help="Bind-Adresse")] = "0.0.0.0",
     port: Annotated[int, typer.Option(help="Port")] = 8000,
@@ -404,14 +480,6 @@ def serve(
         port=port,
         reload=reload,
     )
-
-
-@app.command()
-def worker() -> None:
-    """ARQ Background-Worker starten."""
-    import subprocess
-
-    subprocess.run([sys.executable, "-m", "arq", "app.worker.settings.WorkerSettings"])
 
 
 # --- Tenant commands ---
@@ -497,6 +565,114 @@ def tenant_list() -> None:
                     created = t.created_at.strftime("%Y-%m-%d") if t.created_at else "-"
                     typer.echo(f"{t.slug:<25} {t.name:<30} {active_str:<8} {created}")
 
+        except Exception as e:
+            typer.echo(f"Fehler: Datenbank nicht verfügbar ({e})", err=True)
+            raise typer.Exit(code=1)
+
+    asyncio.run(_list())
+
+
+# --- User commands ---
+
+
+@user_app.command("create")
+def user_create(
+    email: Annotated[str, typer.Option("--email", "-e", help="E-Mail-Adresse (Login)")],
+    company_name: Annotated[
+        Optional[str],
+        typer.Option("--company", "-c", help="Firmenname für den zugehörigen Mandanten"),
+    ] = None,
+    is_admin: Annotated[
+        bool, typer.Option("--admin/--no-admin", help="Admin-Privilegien")
+    ] = False,
+    password: Annotated[
+        Optional[str],
+        typer.Option(
+            "--password",
+            "-p",
+            help="Initialpasswort. Leer = wird zufällig generiert und ausgegeben.",
+        ),
+    ] = None,
+) -> None:
+    """Lege einen neuen Benutzer + zugehörigen Mandanten (1:1) an.
+
+    Der Benutzer muss beim ersten Login das Passwort ändern.
+    """
+    from app.auth.passwords import generate_initial_password
+    from app.db.service import UserService
+    from app.db.session import async_session_factory
+
+    plain_pw = password or generate_initial_password()
+
+    async def _create() -> None:
+        try:
+            async with async_session_factory() as session:
+                svc = UserService(session)
+                # Pre-flight: ensure email isn't already taken.
+                if await svc.get_by_email(email):
+                    typer.echo(
+                        f"Fehler: ein Benutzer mit E-Mail '{email}' existiert bereits.",
+                        err=True,
+                    )
+                    raise typer.Exit(code=1)
+                user, tenant, api_key = await svc.create_user_with_tenant(
+                    email=email,
+                    password=plain_pw,
+                    company_name=company_name,
+                    is_admin=is_admin,
+                )
+                await session.commit()
+        except typer.Exit:
+            raise
+        except Exception as e:
+            typer.echo(f"Fehler: {e}", err=True)
+            raise typer.Exit(code=1)
+
+        typer.echo("Benutzer angelegt:")
+        typer.echo(f"  E-Mail:           {user.email}")
+        typer.echo(f"  Mandant (Slug):   {tenant.slug}")
+        typer.echo(f"  Mandant (Name):   {tenant.name}")
+        typer.echo(f"  Admin:            {'ja' if user.is_admin else 'nein'}")
+        typer.echo("")
+        typer.echo("Initialpasswort (muss beim ersten Login geändert werden):")
+        typer.echo(f"  {plain_pw}")
+        typer.echo("")
+        typer.echo("Mandanten-API-Key (für /api/v1/* via X-API-Key-Header):")
+        typer.echo(f"  {api_key}")
+        typer.echo("")
+        typer.echo(
+            "Diese Werte erscheinen nur EINMAL. Bitte sicher übermitteln und nicht "
+            "im Klartext speichern."
+        )
+
+    asyncio.run(_create())
+
+
+@user_app.command("list")
+def user_list() -> None:
+    """Liste aller Benutzer mit ihrem Mandanten."""
+    from app.db.service import UserService
+    from app.db.session import async_session_factory
+
+    async def _list() -> None:
+        try:
+            async with async_session_factory() as session:
+                svc = UserService(session)
+                users = await svc.list_users()
+                if not users:
+                    typer.echo("Keine Benutzer gefunden.")
+                    return
+                typer.echo(
+                    f"{'E-Mail':<35} {'Mandant':<25} {'Admin':<6} {'Aktiv':<6} {'Letzter Login'}"
+                )
+                typer.echo("-" * 95)
+                for u in users:
+                    last = u.last_login_at.strftime("%Y-%m-%d %H:%M") if u.last_login_at else "-"
+                    typer.echo(
+                        f"{u.email:<35} {u.tenant.slug:<25} "
+                        f"{'✓' if u.is_admin else '':<6} "
+                        f"{'✓' if u.is_active else '✗':<6} {last}"
+                    )
         except Exception as e:
             typer.echo(f"Fehler: Datenbank nicht verfügbar ({e})", err=True)
             raise typer.Exit(code=1)

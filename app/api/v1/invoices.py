@@ -5,24 +5,25 @@ from __future__ import annotations
 import logging
 import uuid
 from base64 import b64encode
-from pathlib import Path
-from tempfile import NamedTemporaryFile
 
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-from app.config import LLMProvider, settings
-from app.core.extraction.xml_extractor import XMLExtractor
-from app.core.pipeline import ConversionPipeline
+from app.auth.dependencies import require_user
+from app.config import settings
+from app.core.extraction.chain import ExtractionFailed, run_extraction_chain
+from app.core.pipeline import ConversionPipeline, ConversionResult
+from app.db.models import User
 from app.models.invoice import Invoice, OutputFormat, ZUGFeRDProfile
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+# Every /api/v1/invoices/* endpoint requires either a session cookie or a
+# valid X-API-Key header. Both paths are handled by require_user.
+router = APIRouter(dependencies=[Depends(require_user)])
 
 _pipeline = ConversionPipeline()
-_xml_extractor = XMLExtractor()
 
 
 # --- Response schemas ---
@@ -53,6 +54,17 @@ class ValidateResponse(BaseModel):
     kosit_available: bool = False
 
 
+class EnrichResponse(BaseModel):
+    job_id: str
+    success: bool
+    invoice: Invoice | None = None
+    extraction_method: str = ""
+    pdf_source: str | None = None  # "original" | "rerender" | None
+    pdf_base64: str | None = None
+    errors: list[str] = []
+    warnings: list[str] = []
+
+
 class InvoiceRecordResponse(BaseModel):
     id: str
     invoice_number: str
@@ -74,16 +86,20 @@ class InvoiceListResponse(BaseModel):
 
 
 async def _try_persist_conversion(
-    invoice: Invoice, job_id: str, success: bool, errors: list[str]
+    invoice: Invoice,
+    job_id: str,
+    success: bool,
+    errors: list[str],
+    tenant_id: str,
 ) -> None:
-    """Attempt to persist a conversion record to the database."""
+    """Attempt to persist a conversion record to the database, scoped to a tenant."""
     try:
         from app.db.session import async_session_factory
         from app.db.service import InvoiceService
 
         async with async_session_factory() as session:
             svc = InvoiceService(session)
-            record = await svc.create_record(invoice, "default")
+            record = await svc.create_record(invoice, tenant_id)
             await svc.update_status(
                 record.id,
                 status="completed" if success else "failed",
@@ -95,9 +111,14 @@ async def _try_persist_conversion(
 
 
 async def _try_persist_extraction(
-    invoice: Invoice | None, job_id: str, method: str, success: bool, errors: list[str]
+    invoice: Invoice | None,
+    job_id: str,
+    method: str,
+    success: bool,
+    errors: list[str],
+    tenant_id: str,
 ) -> None:
-    """Attempt to persist an extraction record to the database."""
+    """Attempt to persist an extraction record to the database, scoped to a tenant."""
     if not invoice or not success:
         return
     try:
@@ -106,7 +127,7 @@ async def _try_persist_extraction(
 
         async with async_session_factory() as session:
             svc = InvoiceService(session)
-            record = await svc.create_record(invoice, "default")
+            record = await svc.create_record(invoice, tenant_id)
             await svc.update_status(record.id, status="extracted")
             await session.commit()
     except Exception as e:
@@ -121,7 +142,10 @@ async def _try_persist_extraction(
     response_model=ConvertResponse,
     summary="Convert invoice data to E-Rechnung",
 )
-async def convert_invoice(invoice: Invoice) -> ConvertResponse:
+async def convert_invoice(
+    invoice: Invoice,
+    user: User = Depends(require_user),
+) -> ConvertResponse:
     """Convert structured invoice data to ZUGFeRD PDF, XRechnung CII, or XRechnung UBL.
 
     Accepts a complete Invoice object (EN 16931) and returns the
@@ -132,8 +156,10 @@ async def convert_invoice(invoice: Invoice) -> ConvertResponse:
 
     result = _pipeline.convert(invoice)
 
-    # Persist to DB (non-blocking, best-effort)
-    await _try_persist_conversion(invoice, job_id, result.success, result.errors)
+    # Persist to DB (non-blocking, best-effort), scoped to the caller's tenant.
+    await _try_persist_conversion(
+        invoice, job_id, result.success, result.errors, str(user.tenant_id)
+    )
 
     return ConvertResponse(
         job_id=job_id,
@@ -181,12 +207,16 @@ async def convert_and_download(invoice: Invoice) -> Response:
     response_model=ExtractResponse,
     summary="Extract invoice data from uploaded file",
 )
-async def extract_invoice(file: UploadFile) -> ExtractResponse:
+async def extract_invoice(
+    file: UploadFile,
+    user: User = Depends(require_user),
+) -> ExtractResponse:
     """Upload a ZUGFeRD PDF, XRechnung XML, or unstructured PDF and extract
     the invoice data. Falls back to LLM-based extraction for unstructured PDFs
     when configured.
     """
     job_id = uuid.uuid4().hex[:12]
+    tenant_id = str(user.tenant_id)
 
     allowed_types = ("application/pdf", "application/xml", "text/xml")
     if file.content_type not in allowed_types:
@@ -199,117 +229,219 @@ async def extract_invoice(file: UploadFile) -> ExtractResponse:
     suffix = ".pdf" if "pdf" in (file.content_type or "") else ".xml"
     logger.info("Extract job %s: %s (%s)", job_id, file.filename, suffix)
 
-    # Try structured extraction first
     try:
-        with NamedTemporaryFile(suffix=suffix, delete=True) as tmp:
-            tmp.write(content)
-            tmp.flush()
-            invoice = _xml_extractor.extract_from_file(Path(tmp.name))
-        await _try_persist_extraction(invoice, job_id, "structured", True, [])
-        return ExtractResponse(
-            job_id=job_id, success=True, invoice=invoice, extraction_method="structured"
-        )
-    except Exception:
-        pass
+        result = await run_extraction_chain(content, suffix)
+    except ExtractionFailed as e:
+        return ExtractResponse(job_id=job_id, success=False, errors=[str(e)])
 
-    # Fallback 1: invoice2data template matching for PDFs
-    if suffix == ".pdf":
-        try:
-            from app.core.extraction.invoice2data_extractor import Invoice2DataExtractor
-
-            with NamedTemporaryFile(suffix=".pdf", delete=True) as tmp:
-                tmp.write(content)
-                tmp.flush()
-                i2d = Invoice2DataExtractor()
-                invoice = i2d.extract(Path(tmp.name))
-            await _try_persist_extraction(invoice, job_id, "invoice2data", True, [])
-            return ExtractResponse(
-                job_id=job_id, success=True, invoice=invoice, extraction_method="invoice2data"
-            )
-        except ImportError:
-            pass  # invoice2data not installed
-        except Exception:
-            pass  # No matching template
-
-    # Fallback 2: LLM extraction for PDFs
-    if suffix == ".pdf" and settings.llm_provider != LLMProvider.NONE:
-        try:
-            from app.core.extraction.llm_extractor import LLMExtractor
-            from app.core.extraction.pdf_extractor import PDFExtractor
-
-            with NamedTemporaryFile(suffix=".pdf", delete=True) as tmp:
-                tmp.write(content)
-                tmp.flush()
-                pdf_ext = PDFExtractor(Path(tmp.name))
-                text = pdf_ext.extract_text()
-                tables = pdf_ext.extract_tables()
-
-            llm_ext = LLMExtractor()
-            invoice = await llm_ext.extract(text, tables)
-            await _try_persist_extraction(invoice, job_id, "llm", True, [])
-            return ExtractResponse(
-                job_id=job_id, success=True, invoice=invoice, extraction_method="llm"
-            )
-        except Exception as e:
-            return ExtractResponse(
-                job_id=job_id, success=False, errors=[f"LLM extraction failed: {e}"]
-            )
-
+    await _try_persist_extraction(
+        result.invoice, job_id, result.method, True, [], tenant_id
+    )
     return ExtractResponse(
         job_id=job_id,
-        success=False,
-        errors=["Could not extract structured data. Configure LLM_PROVIDER for unstructured PDFs."],
+        success=True,
+        invoice=result.invoice,
+        extraction_method=result.method,
     )
+
+
+# --- Enrich: PDF in, conformant ZUGFeRD-PDF (original + embedded XML) out ---
+
+
+async def _run_enrich(
+    content: bytes,
+    suffix: str,
+    *,
+    profile: ZUGFeRDProfile,
+    force_rerender: bool,
+    tenant_id: str,
+    job_id: str,
+) -> tuple[Invoice | None, str, ConversionResult | None, list[str], list[str]]:
+    """Shared core for enrich endpoints. Returns (invoice, method, result, errors, warnings)."""
+    if suffix != ".pdf":
+        return (
+            None,
+            "",
+            None,
+            ["Anreichern unterstützt nur PDF-Eingaben."],
+            [],
+        )
+
+    try:
+        ex = await run_extraction_chain(content, suffix)
+    except ExtractionFailed as e:
+        return (None, "", None, [str(e)], [])
+
+    invoice = ex.invoice
+    invoice.output_format = OutputFormat.ZUGFERD_PDF
+    invoice.profile = profile
+
+    result = _pipeline.convert(
+        invoice,
+        source_pdf_bytes=None if force_rerender else content,
+        force_rerender=force_rerender,
+    )
+
+    await _try_persist_conversion(invoice, job_id, result.success, result.errors, tenant_id)
+
+    return invoice, ex.method, result, list(result.errors), list(result.warnings)
+
+
+@router.post(
+    "/enrich",
+    response_model=EnrichResponse,
+    summary="Enrich a PDF: extract data and embed XML to produce a ZUGFeRD PDF",
+)
+async def enrich_invoice(
+    file: UploadFile,
+    profile: ZUGFeRDProfile = Form(ZUGFeRDProfile.EN16931),
+    force_rerender: bool = Form(False),
+    user: User = Depends(require_user),
+) -> EnrichResponse:
+    """Upload a PDF invoice. The endpoint extracts the invoice data
+    (structured / invoice2data / LLM fallback chain), generates a
+    standards-conformant CII-XML, and embeds it into the **original PDF**.
+
+    On embedding failure (e.g., source PDF is malformed), the pipeline
+    automatically falls back to a freshly rendered visual PDF and reports
+    the reason in `warnings`. Set `force_rerender=true` to skip the original
+    pass-through (e.g., when strict PDF/A-3 conformance is required).
+    """
+    job_id = uuid.uuid4().hex[:12]
+    tenant_id = str(user.tenant_id)
+
+    if file.content_type != "application/pdf":
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=f"Anreichern braucht ein PDF, nicht {file.content_type}.",
+        )
+
+    content = await file.read()
+    logger.info("Enrich job %s: %s (force_rerender=%s)", job_id, file.filename, force_rerender)
+
+    invoice, method, result, errors, warnings = await _run_enrich(
+        content,
+        ".pdf",
+        profile=profile,
+        force_rerender=force_rerender,
+        tenant_id=tenant_id,
+        job_id=job_id,
+    )
+
+    if result is None:
+        return EnrichResponse(job_id=job_id, success=False, errors=errors, warnings=warnings)
+
+    return EnrichResponse(
+        job_id=job_id,
+        success=result.success,
+        invoice=invoice,
+        extraction_method=method,
+        pdf_source=result.pdf_source,
+        pdf_base64=b64encode(result.pdf_bytes).decode() if result.pdf_bytes else None,
+        errors=errors,
+        warnings=warnings,
+    )
+
+
+@router.post(
+    "/enrich/download",
+    summary="Enrich a PDF and stream the result file directly",
+)
+async def enrich_and_download(
+    file: UploadFile,
+    profile: ZUGFeRDProfile = Form(ZUGFeRDProfile.EN16931),
+    force_rerender: bool = Form(False),
+    user: User = Depends(require_user),
+) -> Response:
+    """Same flow as /enrich but returns the ZUGFeRD PDF directly as a
+    file stream. Warnings (e.g., fallback to rerender) are exposed via the
+    custom X-InvoiceForge-Warnings header.
+    """
+    job_id = uuid.uuid4().hex[:12]
+    tenant_id = str(user.tenant_id)
+
+    if file.content_type != "application/pdf":
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=f"Anreichern braucht ein PDF, nicht {file.content_type}.",
+        )
+
+    content = await file.read()
+    invoice, _method, result, errors, warnings = await _run_enrich(
+        content,
+        ".pdf",
+        profile=profile,
+        force_rerender=force_rerender,
+        tenant_id=tenant_id,
+        job_id=job_id,
+    )
+
+    if result is None or not result.success or not result.pdf_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"errors": errors, "warnings": warnings},
+        )
+
+    safe_name = invoice.invoice_number.replace("/", "_").replace(" ", "_") if invoice else job_id
+    headers = {
+        "Content-Disposition": f'attachment; filename="{safe_name}_zugferd.pdf"',
+        "X-InvoiceForge-PDF-Source": result.pdf_source or "",
+    }
+    if warnings:
+        # Header values must be ASCII-safe; join + collapse newlines.
+        headers["X-InvoiceForge-Warnings"] = " | ".join(w.replace("\n", " ") for w in warnings)
+
+    return Response(content=result.pdf_bytes, media_type="application/pdf", headers=headers)
 
 
 @router.post(
     "/validate",
     response_model=ValidateResponse,
-    summary="Validate an E-Rechnung XML file",
+    summary="Validate an E-Rechnung file (XML or ZUGFeRD/Factur-X PDF)",
 )
 async def validate_invoice(file: UploadFile) -> ValidateResponse:
-    """Upload a CII or UBL XML for XSD validation and optional KoSIT Schematron check."""
-    if file.content_type not in ("application/xml", "text/xml"):
+    """Upload a CII/UBL XML or a ZUGFeRD/Factur-X PDF and run the full
+    validator chain: XSD + offline Schematron + (optional) KoSIT.
+
+    For PDFs, the embedded CII-XML is extracted first; the validation runs
+    against that XML.
+    """
+    is_xml = file.content_type in ("application/xml", "text/xml")
+    is_pdf = file.content_type == "application/pdf" or (
+        (file.filename or "").lower().endswith(".pdf")
+    )
+    if not (is_xml or is_pdf):
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail="Only XML files can be validated",
+            detail="Use XML or PDF (ZUGFeRD/Factur-X).",
         )
 
     content = await file.read()
 
-    from lxml import etree
+    if is_pdf:
+        try:
+            from facturx import get_xml_from_pdf
 
-    try:
-        etree.fromstring(content)
-    except etree.XMLSyntaxError as e:
-        return ValidateResponse(is_valid=False, errors=[f"XML parse error: {e}"])
+            _name, xml_bytes = get_xml_from_pdf(content)
+        except Exception as e:
+            return ValidateResponse(is_valid=False, errors=[f"PDF/XML extract failed: {e}"])
+        if not xml_bytes:
+            return ValidateResponse(
+                is_valid=False, errors=["No embedded e-invoice XML found in PDF."]
+            )
+    else:
+        xml_bytes = content
 
-    errors: list[str] = []
-    warnings: list[str] = []
+    from app.core.validation.validator import InvoiceValidator
 
-    # XSD validation via drafthorse (CII only – UBL passes through)
-    try:
-        from drafthorse.utils import validate_xml
-        validate_xml(content, schema="FACTUR-X_EN16931")
-    except Exception as e:
-        errors.append(f"XSD: {e}")
-
-    # KoSIT Schematron validation (if sidecar is available)
-    kosit_available = False
-    from app.core.validation.kosit_client import KoSITClient
-    client = KoSITClient()
-    if await client.is_available():
-        kosit_available = True
-        result = await client.validate(content)
-        if not result.is_valid:
-            errors.extend(result.errors)
-        warnings.extend(result.warnings)
+    validator = InvoiceValidator(kosit_url=settings.kosit_validator_url)
+    result = await validator.validate_full(xml_bytes)
 
     return ValidateResponse(
-        is_valid=len(errors) == 0,
-        errors=errors,
-        warnings=warnings,
-        kosit_available=kosit_available,
+        is_valid=result.is_valid,
+        errors=[f"{e.source}: {e.message}" for e in result.errors],
+        warnings=[f"{w.source}: {w.message}" for w in result.warnings],
+        kosit_available=result.kosit_valid is not None,
     )
 
 
@@ -321,15 +453,18 @@ async def validate_invoice(file: UploadFile) -> ValidateResponse:
 async def list_records(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    user: User = Depends(require_user),
 ) -> InvoiceListResponse:
-    """List persisted invoice records (newest first)."""
+    """List persisted invoice records for the current user's tenant (newest first)."""
     try:
         from app.db.session import async_session_factory
         from app.db.service import InvoiceService
 
         async with async_session_factory() as session:
             svc = InvoiceService(session)
-            records = await svc.list_records("default", limit=limit, offset=offset)
+            records = await svc.list_records(
+                str(user.tenant_id), limit=limit, offset=offset
+            )
             return InvoiceListResponse(
                 records=[
                     InvoiceRecordResponse(
@@ -356,8 +491,16 @@ async def list_records(
     "/records/{record_id}",
     summary="Get a single invoice record",
 )
-async def get_record(record_id: str) -> dict:
-    """Retrieve a single invoice record with its stored data."""
+async def get_record(
+    record_id: str,
+    user: User = Depends(require_user),
+) -> dict:
+    """Retrieve a single invoice record with its stored data.
+
+    Records are tenant-scoped — a user can only fetch records belonging to
+    their own tenant. Cross-tenant requests return 404 (not 403) to avoid
+    leaking record existence.
+    """
     try:
         from app.db.session import async_session_factory
         from app.db.service import InvoiceService
@@ -366,7 +509,7 @@ async def get_record(record_id: str) -> dict:
         async with async_session_factory() as session:
             svc = InvoiceService(session)
             record = await svc.get_record(record_uuid)
-            if record is None:
+            if record is None or record.tenant_id != user.tenant_id:
                 raise HTTPException(status_code=404, detail="Record not found")
             invoice_data = await svc.get_invoice_data(record_uuid)
             return {

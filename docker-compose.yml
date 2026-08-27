@@ -5,13 +5,18 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: invoiceforge-api
+    # Public traffic enters via Nginx Proxy Manager (docker-apps_proxy network).
+    # Bind to loopback only so the host port is reachable from this machine
+    # for local debugging (curl on the host) but not from the public IP.
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
+    env_file:
+      - .env
     environment:
       - APP_ENV=production
       - APP_DEBUG=false
       - DATABASE_URL=postgresql+asyncpg://invoiceforge:invoiceforge@postgres:5432/invoiceforge
-      - REDIS_URL=redis://redis:6379/0
       - KOSIT_VALIDATOR_URL=http://kosit-validator:8080
       - STORAGE_BASE_PATH=/app/data/storage
       - SCHEMA_DIR=/app/data/schemas
@@ -21,10 +26,9 @@ services:
     networks:
       - default
       - backend
+      - npm
     depends_on:
       postgres:
-        condition: service_healthy
-      redis:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -32,65 +36,6 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
-    restart: unless-stopped
-
-  # --- Streamlit Frontend ---
-  ui:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: invoiceforge-ui
-    command: ["streamlit", "run", "ui/streamlit_app.py", "--server.port=8501", "--server.address=0.0.0.0", "--server.headless=true"]
-    ports:
-      - "8501:8501"
-    environment:
-      - APP_ENV=production
-      - DATABASE_URL=postgresql+asyncpg://invoiceforge:invoiceforge@postgres:5432/invoiceforge
-      - REDIS_URL=redis://redis:6379/0
-      - KOSIT_VALIDATOR_URL=http://kosit-validator:8080
-      - STORAGE_BASE_PATH=/app/data/storage
-      - SCHEMA_DIR=/app/data/schemas
-    volumes:
-      - storage_data:/app/data/storage
-      - schema_data:/app/data/schemas
-    networks:
-      - default
-      - backend
-    depends_on:
-      postgres:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8501/healthz"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-      start_period: 15s
-    restart: unless-stopped
-
-  # --- ARQ Background Worker ---
-  worker:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: invoiceforge-worker
-    command: ["python", "-m", "arq", "app.worker.settings.WorkerSettings"]
-    environment:
-      - APP_ENV=production
-      - DATABASE_URL=postgresql+asyncpg://invoiceforge:invoiceforge@postgres:5432/invoiceforge
-      - REDIS_URL=redis://redis:6379/0
-      - KOSIT_VALIDATOR_URL=http://kosit-validator:8080
-      - STORAGE_BASE_PATH=/app/data/storage
-      - SCHEMA_DIR=/app/data/schemas
-    volumes:
-      - storage_data:/app/data/storage
-      - schema_data:/app/data/schemas
-    networks:
-      - backend
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
     restart: unless-stopped
 
   # --- PostgreSQL ---
@@ -112,39 +57,6 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
-
-  # --- Redis ---
-  redis:
-    image: redis:7-alpine
-    container_name: invoiceforge-redis
-    # No external ports – only reachable via Docker network
-    networks:
-      - backend
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-
-  # --- Ollama LLM Server (optional) ---
-  # Activate with: docker compose --profile llm up
-  ollama:
-    image: ollama/ollama:latest
-    container_name: invoiceforge-ollama
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama_data:/root/.ollama
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:11434/api/version || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-    restart: unless-stopped
-    profiles:
-      - llm
 
   # --- KoSIT Validator (optional, for full Schematron validation) ---
   # Activate with: docker compose --profile full up
@@ -182,10 +94,14 @@ networks:
   backend:
     driver: bridge
     internal: true
+  # External network managed by the Nginx Proxy Manager stack.
+  # NPM proxies erechnung.broetzens.de -> invoiceforge-api:8000
+  npm:
+    external: true
+    name: docker-apps_proxy
 
 volumes:
   postgres_data:
   storage_data:
   schema_data:
   kosit_data:
-  ollama_data:

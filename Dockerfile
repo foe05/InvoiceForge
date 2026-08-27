@@ -23,7 +23,7 @@ WORKDIR /build
 
 COPY pyproject.toml README.md ./
 COPY app/__init__.py ./app/
-RUN pip install --no-cache-dir --prefix=/install ".[ocr,ui]"
+RUN pip install --no-cache-dir --prefix=/install ".[ocr]"
 
 
 # --- Stage 2: Runtime image ---
@@ -62,8 +62,7 @@ RUN mkdir -p /app/data/storage /app/data/schemas && \
 
 EXPOSE 8000 8501
 
-HEALTHCHECK --interval=15s --timeout=5s --retries=3 --start-period=10s \
-    CMD curl -f http://localhost:8000/health || exit 1
+# Healthchecks are defined per-service in docker-compose.yml.
 
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

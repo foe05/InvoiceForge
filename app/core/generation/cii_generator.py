@@ -6,7 +6,7 @@ and produces EN 16931 / XRechnung-compliant CII-XML.
 
 from __future__ import annotations
 
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from drafthorse.models.accounting import ApplicableTradeTax
 from drafthorse.models.document import Document
@@ -16,6 +16,23 @@ from drafthorse.models.payment import PaymentMeans, PaymentTerms as DHPaymentTer
 from drafthorse.models.tradelines import LineItem
 
 from app.models.invoice import Invoice, ZUGFeRDProfile
+
+
+_TWO_PLACES = Decimal("0.01")
+
+
+def _money(value: Decimal | None) -> Decimal | None:
+    """Quantize a monetary value to exactly 2 decimal places (ROUND_HALF_UP).
+
+    EN 16931 BR-DEC-* rules cap the decimals of monetary fields (BT-106, -109,
+    -110, -112, -116, -117, -131, etc.) at 2. drafthorse serialises Decimals
+    verbatim, so values like Decimal("52.9328") leak through as <Amount>52.9328
+    </Amount> and trigger validator errors. None passes through unchanged so we
+    can call this on optional totals (prepaid_amount, charge_total, ...).
+    """
+    if value is None:
+        return None
+    return value.quantize(_TWO_PLACES, rounding=ROUND_HALF_UP)
 
 
 # Guideline URNs per profile
@@ -165,20 +182,20 @@ class CIIGenerator:
             tax.type_code = "VAT"
             tax.category_code = tb.tax_category
             tax.rate_applicable_percent = tb.tax_rate
-            tax.basis_amount = tb.taxable_amount
-            tax.calculated_amount = tb.tax_amount
+            tax.basis_amount = _money(tb.taxable_amount)        # BT-116
+            tax.calculated_amount = _money(tb.tax_amount)        # BT-117
             settlement.trade_tax.add(tax)
 
         # --- Totals (BG-22) – CurrencyFields take (amount, currency) tuples ---
         ms = settlement.monetary_summation
-        ms.line_total = inv.totals.net_amount
-        ms.charge_total = inv.totals.charge_total
-        ms.allowance_total = inv.totals.allowance_total
-        ms.tax_basis_total = (inv.totals.net_amount, currency)
-        ms.tax_total = (inv.totals.tax_amount, currency)
-        ms.grand_total = (inv.totals.gross_amount, currency)
-        ms.prepaid_total = inv.totals.prepaid_amount
-        ms.due_amount = inv.totals.due_amount
+        ms.line_total = _money(inv.totals.net_amount)            # BT-106
+        ms.charge_total = _money(inv.totals.charge_total)        # BT-108
+        ms.allowance_total = _money(inv.totals.allowance_total)  # BT-107
+        ms.tax_basis_total = (_money(inv.totals.net_amount), currency)    # BT-109
+        ms.tax_total = (_money(inv.totals.tax_amount), currency)          # BT-110
+        ms.grand_total = (_money(inv.totals.gross_amount), currency)      # BT-112
+        ms.prepaid_total = _money(inv.totals.prepaid_amount)     # BT-113
+        ms.due_amount = _money(inv.totals.due_amount)            # BT-115
 
         # --- Invoice lines (BG-25) ---
         for line in inv.lines:
@@ -187,12 +204,18 @@ class CIIGenerator:
             li.product.name = line.description
             if line.item_number:
                 li.product.seller_assigned_id = line.item_number
-            li.agreement.net.amount = line.unit_price
+            # BT-146 (item net price). EN-16931 technically allows >2 decimals
+            # for unit prices, but rounding to 2 keeps line totals consistent
+            # (BT-131 = quantity × BT-146) and avoids validator warnings on
+            # mixed-precision inputs from LLM extraction.
+            li.agreement.net.amount = _money(line.unit_price)
             li.delivery.billed_quantity = (line.quantity, line.unit_code)
             li.settlement.trade_tax.type_code = "VAT"
             li.settlement.trade_tax.category_code = line.tax_category
             li.settlement.trade_tax.rate_applicable_percent = line.tax_rate
-            li.settlement.monetary_summation.total_amount = line.line_net_amount
+            li.settlement.monetary_summation.total_amount = _money(
+                line.line_net_amount
+            )                                                    # BT-131
             doc.trade.items.add(li)
 
         # Serialize to XML bytes (with XSD validation)
