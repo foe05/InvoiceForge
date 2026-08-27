@@ -10,9 +10,12 @@ and reject longer inputs at the API surface. Users in practice never hit it.
 
 from __future__ import annotations
 
+import logging
 import secrets
 
 import bcrypt
+
+logger = logging.getLogger(__name__)
 
 # Cost factor: 12 rounds ≈ 250 ms on modern x86. Bumping this in the future
 # does not invalidate existing hashes — they keep working at their old cost.
@@ -52,6 +55,9 @@ def verify_password(plaintext: str, hashed: str) -> bool:
         return bcrypt.checkpw(encoded, hashed.encode("ascii"))
     except Exception:
         # Malformed hash, encoding error — never propagate as auth success.
+        # Log it: silently returning False here is indistinguishable from a
+        # wrong password and has cost real debugging time before.
+        logger.warning("bcrypt verification raised; treating as failed login", exc_info=True)
         return False
 
 

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 import secrets
+import uuid
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -16,9 +18,12 @@ from app.auth.dependencies import (
     get_current_user,
     require_user,
 )
+from app.auth.reset_tokens import read_reset_token, token_matches_user
 from app.db.models import User
 from app.db.service import UserService
 from app.db.session import get_session
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 templates = Jinja2Templates(directory="ui/templates")
@@ -77,6 +82,10 @@ async def login_submit(
     svc = UserService(session)
     user = await svc.authenticate(email, password)
     if user is None:
+        # Log the attempted address: without it a typo'd e-mail and a wrong
+        # password are indistinguishable in the access log. Never log the
+        # password itself.
+        logger.warning("Failed login attempt for %r", email)
         # Re-render with error; preserve next URL.
         csrf = _ensure_csrf(request)
         return templates.TemplateResponse(
@@ -184,3 +193,115 @@ async def password_submit(
         url="/account/password?info=Passwort+erfolgreich+geändert",
         status_code=status.HTTP_303_SEE_OTHER,
     )
+
+
+# --- Password reset via admin-issued link ---
+#
+# No self-service "forgot password" entry point exists: an admin issues the link
+# with `invoiceforge user reset-link` and hands it over out of band. The token is
+# stateless (see app/auth/reset_tokens.py) — no table, no cleanup job.
+
+
+async def _user_for_token(token: str, svc: UserService) -> User | None:
+    """Resolve a reset token to its user, or None if it is invalid/spent."""
+    parsed = read_reset_token(token)
+    if parsed is None:
+        return None
+    uid, fingerprint = parsed
+    try:
+        user = await svc.get_by_id(uuid.UUID(uid))
+    except ValueError:
+        return None
+    if user is None or not user.is_active:
+        return None
+    if not token_matches_user(fingerprint, user):
+        return None
+    return user
+
+
+def _render_reset_invalid(request: Request):
+    return templates.TemplateResponse(
+        request,
+        "reset_password.html",
+        {
+            "version": __version__,
+            "token_valid": False,
+            "error": (
+                "Dieser Link ist ungültig, abgelaufen oder wurde bereits verwendet. "
+                "Bitte fordere einen neuen an."
+            ),
+        },
+        status_code=status.HTTP_400_BAD_REQUEST,
+    )
+
+
+@router.get("/reset/{token}", response_class=HTMLResponse)
+async def reset_form(
+    request: Request,
+    token: str,
+    session: AsyncSession = Depends(get_session),
+):
+    user = await _user_for_token(token, UserService(session))
+    if user is None:
+        return _render_reset_invalid(request)
+
+    return templates.TemplateResponse(
+        request,
+        "reset_password.html",
+        {
+            "version": __version__,
+            "token_valid": True,
+            "token": token,
+            "email": user.email,
+            "csrf_token": _ensure_csrf(request),
+        },
+    )
+
+
+@router.post("/reset/{token}")
+async def reset_submit(
+    request: Request,
+    token: str,
+    new_password: str = Form(...),
+    confirm_password: str = Form(...),
+    csrf_token: str = Form(...),
+    session: AsyncSession = Depends(get_session),
+):
+    _check_csrf(request, csrf_token)
+    svc = UserService(session)
+    user = await _user_for_token(token, svc)
+    if user is None:
+        return _render_reset_invalid(request)
+
+    def _render(error_msg: str):
+        return templates.TemplateResponse(
+            request,
+            "reset_password.html",
+            {
+                "version": __version__,
+                "token_valid": True,
+                "token": token,
+                "email": user.email,
+                "csrf_token": _ensure_csrf(request),
+                "error": error_msg,
+            },
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if new_password != confirm_password:
+        return _render("Die beiden Passwörter stimmen nicht überein.")
+    if len(new_password) < 10:
+        return _render("Mindestlänge 10 Zeichen.")
+
+    # Setting the password rotates the hash, which retires this token.
+    await svc.set_password(user, new_password, must_change=False)
+    await session.commit()
+
+    # Log the user straight in — they just proved control of the reset link.
+    request.session.clear()
+    request.session[SESSION_USER_KEY] = str(user.id)
+    request.session[SESSION_CSRF_KEY] = secrets.token_urlsafe(24)
+    await svc.touch_last_login(user)
+    await session.commit()
+
+    return RedirectResponse(url="/", status_code=status.HTTP_303_SEE_OTHER)

@@ -308,6 +308,9 @@ class UserService:
         await self.session.flush()
         return user, tenant, api_key
 
+    async def get_by_id(self, user_id: uuid.UUID) -> User | None:
+        return await self.session.get(User, user_id)
+
     async def get_by_email(self, email: str) -> User | None:
         result = await self.session.execute(
             select(User).where(User.email == email.lower())
@@ -325,6 +328,17 @@ class UserService:
     async def change_password(self, user: User, new_password: str) -> None:
         user.password_hash = hash_password(new_password)
         user.must_change_password = False
+
+    async def set_password(
+        self, user: User, new_password: str, must_change: bool = False
+    ) -> None:
+        """Set a password without knowing the old one (admin reset / reset link).
+
+        Changing the hash also invalidates any outstanding reset token, since
+        those are pinned to a fingerprint of the current hash.
+        """
+        user.password_hash = hash_password(new_password)
+        user.must_change_password = must_change
 
     async def touch_last_login(self, user: User) -> None:
         user.last_login_at = datetime.now(timezone.utc)

@@ -29,6 +29,22 @@ docker exec invoiceforge-api invoiceforge user create \
 
 The command prints an initial password and the tenant's API key. The user must change the initial password on first login (`must_change_password=True` is enforced in `app/auth/dependencies.py`). The API key is for `/api/v1/*` calls via `X-API-Key` header — alternative to cookie auth.
 
+### Password reset
+
+There is no self-service "forgot password" flow and no mail sending. An admin resets in one of two ways:
+
+```bash
+# (a) set a new password directly; prints it, forces a change on next login
+docker exec invoiceforge-api invoiceforge user reset-password --email user@example.com
+
+# (b) issue a link the user redeems themselves at /reset/<token>
+docker exec invoiceforge-api invoiceforge user reset-link --email user@example.com --ttl-hours 24
+```
+
+Reset tokens (`app/auth/reset_tokens.py`) are **stateless** — signed with `app_secret_key` via itsdangerous, no table and no cleanup job. The payload carries a fingerprint of the user's current password hash, so redeeming a link (or any other password change) rotates the hash and retires every outstanding link for that user. The TTL travels inside the signed payload and is capped at `MAX_TTL_SECONDS`. Rotating `app_secret_key` invalidates all outstanding links and all sessions.
+
+`reset-link` builds the URL from `PUBLIC_BASE_URL` (`app.config.Settings.public_base_url`), since the CLI has no request to derive the origin from. Set it in `.env` for production, otherwise links point at `localhost:8000`.
+
 ### Docker
 
 ```bash

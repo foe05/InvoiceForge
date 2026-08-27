@@ -648,6 +648,130 @@ def user_create(
     asyncio.run(_create())
 
 
+@user_app.command("reset-password")
+def user_reset_password(
+    email: Annotated[str, typer.Option("--email", "-e", help="E-Mail-Adresse des Benutzers")],
+    password: Annotated[
+        Optional[str],
+        typer.Option(
+            "--password",
+            "-p",
+            help="Neues Passwort. Leer = wird zufällig generiert und ausgegeben.",
+        ),
+    ] = None,
+    force_change: Annotated[
+        bool,
+        typer.Option(
+            "--force-change/--no-force-change",
+            help="Benutzer muss das Passwort beim nächsten Login ändern.",
+        ),
+    ] = True,
+) -> None:
+    """Setze das Passwort eines Benutzers zurück (Admin, ohne altes Passwort).
+
+    Offene Reset-Links des Benutzers werden dadurch ungültig.
+    """
+    from app.auth.passwords import generate_initial_password
+    from app.db.service import UserService
+    from app.db.session import async_session_factory
+
+    plain_pw = password or generate_initial_password()
+
+    async def _reset() -> None:
+        try:
+            async with async_session_factory() as session:
+                svc = UserService(session)
+                user = await svc.get_by_email(email)
+                if user is None:
+                    typer.echo(f"Fehler: kein Benutzer mit E-Mail '{email}'.", err=True)
+                    raise typer.Exit(code=1)
+                await svc.set_password(user, plain_pw, must_change=force_change)
+                await session.commit()
+                user_email = user.email
+        except typer.Exit:
+            raise
+        except Exception as e:
+            typer.echo(f"Fehler: {e}", err=True)
+            raise typer.Exit(code=1)
+
+        typer.echo(f"Passwort für {user_email} zurückgesetzt.")
+        typer.echo("")
+        typer.echo("Neues Passwort:")
+        typer.echo(f"  {plain_pw}")
+        typer.echo("")
+        if force_change:
+            typer.echo("Der Benutzer muss es beim nächsten Login ändern.")
+        typer.echo("Erscheint nur EINMAL. Bitte sicher übermitteln.")
+
+    asyncio.run(_reset())
+
+
+@user_app.command("reset-link")
+def user_reset_link(
+    email: Annotated[str, typer.Option("--email", "-e", help="E-Mail-Adresse des Benutzers")],
+    ttl_hours: Annotated[
+        int, typer.Option("--ttl-hours", help="Gültigkeitsdauer des Links in Stunden")
+    ] = 24,
+) -> None:
+    """Erzeuge einen einmalig nutzbaren Reset-Link zum Weitergeben.
+
+    Das Passwort bleibt unverändert, bis der Benutzer den Link einlöst. Der Link
+    verfällt nach --ttl-hours und wird nach der ersten Nutzung ungültig.
+    """
+    from app.auth.reset_tokens import MAX_TTL_SECONDS, generate_reset_token
+    from app.config import settings
+    from app.db.service import UserService
+    from app.db.session import async_session_factory
+
+    if ttl_hours < 1:
+        typer.echo("Fehler: --ttl-hours muss mindestens 1 sein.", err=True)
+        raise typer.Exit(code=1)
+    if ttl_hours * 3600 > MAX_TTL_SECONDS:
+        typer.echo(
+            f"Fehler: --ttl-hours darf höchstens {MAX_TTL_SECONDS // 3600} sein.", err=True
+        )
+        raise typer.Exit(code=1)
+
+    async def _link() -> None:
+        try:
+            async with async_session_factory() as session:
+                svc = UserService(session)
+                user = await svc.get_by_email(email)
+                if user is None:
+                    typer.echo(f"Fehler: kein Benutzer mit E-Mail '{email}'.", err=True)
+                    raise typer.Exit(code=1)
+                if not user.is_active:
+                    typer.echo(
+                        f"Fehler: Benutzer '{email}' ist deaktiviert — Link wäre wertlos.",
+                        err=True,
+                    )
+                    raise typer.Exit(code=1)
+                token = generate_reset_token(user, ttl_seconds=ttl_hours * 3600)
+                user_email = user.email
+        except typer.Exit:
+            raise
+        except Exception as e:
+            typer.echo(f"Fehler: {e}", err=True)
+            raise typer.Exit(code=1)
+
+        base = settings.public_base_url.rstrip("/")
+        typer.echo(f"Reset-Link für {user_email} (gültig {ttl_hours} h, einmalig nutzbar):")
+        typer.echo("")
+        typer.echo(f"  {base}/reset/{token}")
+        typer.echo("")
+        typer.echo(
+            "Wer diesen Link hat, kann das Passwort setzen — bitte über einen "
+            "vertraulichen Kanal übermitteln."
+        )
+        if base.startswith("http://"):
+            typer.echo(
+                "Hinweis: PUBLIC_BASE_URL ist nicht HTTPS. Für den Produktivbetrieb setzen.",
+                err=True,
+            )
+
+    asyncio.run(_link())
+
+
 @user_app.command("list")
 def user_list() -> None:
     """Liste aller Benutzer mit ihrem Mandanten."""

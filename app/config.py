@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     app_env: Environment = Environment.DEVELOPMENT
     app_debug: bool = False
     app_secret_key: str = "change-me-in-production"
+    # Public origin used to build password-reset links on the CLI, which has no
+    # request context to derive it from. No trailing slash.
+    public_base_url: str = "http://localhost:8000"
 
     # Database
     database_url: str = (
